@@ -1,0 +1,7 @@
+eclipse/
+.gradle/
+dist/
+build/
+.DS_Store
+*swp
+*swo

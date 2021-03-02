@@ -136,7 +136,8 @@ public class ShannonLoader extends BinaryLoader
             return false;
         }
 
-        Msg.info(this, tocFirst.toString());
+        Msg.info(this, String.format("ShannonLoader TOC header found at with size=%08x...parsing header",
+            tocFirst.getSize()));
 
         long prevPointerIndex = reader.getPointerIndex();
 
@@ -157,47 +158,103 @@ public class ShannonLoader extends BinaryLoader
 
             headerMap.put(header.getName(), header);
 
-            Msg.info(this, header.toString());
           } catch (IOException e) {
             Msg.error(this, String.format("Failed to next TOC section header index %d", headerMap.size()));
             return false;
           }
         }
 
-        Msg.info(this, String.format("Found %d TOC sections", headerMap.size()));
+        Msg.info(this, String.format("==== Found %d TOC sections ====", headerMap.size()));
+
+        List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
+        Collections.sort(headerList, (o1, o2) -> o1.getOffset() - o2.getOffset());
+
+        for (TOCSectionHeader header : headerList) {
+            Msg.info(this, header.toString());
+        }
 
         // required sections
         TOCSectionHeader sec_main = headerMap.get("MAIN");
         TOCSectionHeader sec_boot = headerMap.get("BOOT");
 
         if (sec_main == null || sec_boot == null) {
-          Msg.error(this, "One or more of the sections [MAIN, BOOT] were not found");
+          Msg.error(this, "One or more of the required sections [MAIN, BOOT] were not found");
           return false;
         }
+
+        /* Not clear what VSS is in reality. Its not that important for Shannon security research
+         * to the best of my knowledge though. More reversing needed to confirm this.
+         */
+        Msg.warn(this, "This loader only supports BOOT and MAIN section loading. VSS audio DSP (?) not handled");
 
         MemoryBlockHelper memory = new MemoryBlockHelper(monitor, program, messageLog, provider, 0L);
 
         PatternFinder finder = new PatternFinder(provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
-        int match = finder.find("\\x30\\x0c\\x80\\x04\\x28\\x00\\x00\\x00", -0x24);
 
-        if (match == -1) {
-          Msg.error(this, "Unable to find Shannon memory table pattern");
-          return false;
-        }
-
-        Msg.info(this, String.format("Memory table 0x%08x", match));
+        /* This pattern needs explaining. An MPU entry is a table that Shannon
+         * will process to populate the MPU table of the Cortex-R series CPU.
+         * Each entry is 40 bytes (10 words little-endian) with this layout (each field is 4 bytes):
+         *
+         * [slot][base][size][access_control]{6}[enable]
+         *
+         * Slot - the architectual MPU slot number
+         * Base - the base address the MPU entry should apply to
+         * Size - a size code that indicates the memory range an entry should cover
+         * Access Control - a series of 6 words that are OR'd together to form the MPU permissions
+         * Enable - whether this MPU entry is enabled (usually 1)
+         *
+         * SO...now about this pattern. Well this pattern is matching the first MPU entry:
+         *
+         * [\x00]{8} - matches a slot ID of 0 and base address of 0x00000000
+         * \x1c\x00\x00\x00 - matches a size code 0x8000 bytes
+         * (....){6} - matches 6 arbitrary 4-byte values
+         * \x01\x00\x00\x00 - matches an enable of 1
+         * \x01\x00\x00\x00 - matches the next entry slot ID of 1
+         * \x00\x00\x00\x04 - matches address 0x04000000 which is the Cortex-R Tightly Coupled Memory (TCM) region
+         * \x20 - matches the size code of 0x20000 
+         */
 
         int match_mpu = finder.find("[\\x00]{8}\\x1c\\x00\\x00\\x00(....){6}\\x01\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x04\\x20");
 
         if (match_mpu == -1) {
-          Msg.error(this, "Unable to find Shannon MPU table pattern");
+          Msg.error(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
           return false;
         }
 
-        Msg.info(this, String.format("MPU table 0x%08x", match_mpu));
+        Msg.info(this, String.format("MPU entry table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
+              match_mpu, match_mpu+sec_main.getLoadAddress()));
+
+        /* This pattern ALSO needs explaining :)
+         * It matches an entry in the boot time relocation table.
+         *
+         * These relocation entries are 16 bytes (4 words) of (src, dst, size, function).
+         * Function is a pointer to memcpy, memset, or lz4_decode and they are called
+         * with the first three fields as r0, r1, and r2 (first three args).
+         * These relocations are used to load parts of the MAIN image to special memory regions
+         * at boot and to decompress other resources into memory.
+         *
+         * This pattern matches midway (4 bytes) through a particularly stable entry (by inspection).
+         * I suspect this is configuration data of some kind that is copied, but not sure beyond that.
+         *
+         * \x00\x00\x80\x04 - the destination address of 0x04800000, which is right after the TCM region
+         * \x20\x0c\x00\x00 - the operation size (0xc20)
+         *
+         * The negative offset of -4 realigns the table match address to start at the 'src' field.
+         */
+
+        int match = finder.find("\\x00\\x00\\x80\\x04\\x20\\x0c\\x00\\x00", -0x4);
+
+        if (match == -1) {
+          Msg.error(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");
+          return false;
+        }
+
+        Msg.info(this, String.format("Boot-time relocation table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
+              match, match+sec_main.getLoadAddress()));
 
         ArrayList<AddressItem> addrEntries = new ArrayList<>();
         ArrayList<MPUEntry> mpuEntries = new ArrayList<>();
+        ArrayList<ShannonMemEntry> memEntries = new ArrayList<>();
         reader.setPointerIndex(sec_main.getOffset()+match_mpu);
 
         while (true) {
@@ -213,11 +270,16 @@ public class ShannonLoader extends BinaryLoader
             addrEntries.add(new AddressItem(entry, false));
             addrEntries.add(new AddressItem(entry, true));
 
-            Msg.info(this, entry.toString());
           } catch (IOException e) {
             Msg.error(this, String.format("Failed read to next MPU entry %d", mpuEntries.size()));
             return false;
           }
+        }
+
+        Msg.info(this, String.format("==== Found %d MPU entries ====", mpuEntries.size()));
+
+        for (MPUEntry entry : mpuEntries) {
+            Msg.info(this, entry.toString());
         }
 
         Collections.sort(addrEntries, new Comparator<AddressItem>() {
@@ -233,11 +295,31 @@ public class ShannonLoader extends BinaryLoader
           }
         });
 
+        // Uncomment if you are debugging MPU table entries
+        /*
         for (AddressItem it : addrEntries) {
           Msg.info(this, String.format("%s", it.toString()));
         }
+        */
 
         HashMap<Integer, MPUEntry> active = new HashMap<>();
+
+        /* This is an O(n) algorithm to resolve MPU table overlaps and
+         * coalesce them into a flat map where each address has a single
+         * primary permission set. Cortex-R MPU entries can overlap
+         * in hardware. So what defines their permission priority?
+         * Its higher slot numbers. Take this trival layout:
+         *
+         * 0x0                                   0x3fff
+         *  |---------------------------------------|
+         *  [slot 0 -- 0x0000-0x3fff  RO            ]
+         *             [slot 1 -- 0x1000-0x3fff RW  ]
+         *
+         * If you feel the need to understand this further, I suggest grabbing
+         * your favorite writing utensil and flavor of dead tree to work through it.
+         */
+
+        Msg.info(this, "==== Calculated Shannon Memory Map ====");
 
         for (int i = 0; i < addrEntries.size()-1; i++) {
           AddressItem e = addrEntries.get(i);
@@ -263,31 +345,68 @@ public class ShannonLoader extends BinaryLoader
           }
         }
 
-        reader.setPointerIndex(sec_main.getOffset()+match);
-
         ShannonMemEntry main_tcm_entry = null;
 
-        // TODO: handle all memory addresses instead of just TCM
+        // this can fall into the middle of the table
+        // so we need to scan backwards first
+        int table_address_base = sec_main.getOffset()+match;
+
         while (true) {
+          reader.setPointerIndex(table_address_base);
           ShannonMemEntry entry = new ShannonMemEntry(reader);
+
+          // discard entries that
+          if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
+              entry.getFunction() > (sec_main.getLoadAddress()+sec_main.getSize()) ||
+              entry.getFunction() < sec_main.getLoadAddress()) {
+            // undo our stride
+            table_address_base += 0x10;
+            break;
+          }
+
+          table_address_base -= 0x10;
+        }
+
+        reader.setPointerIndex(table_address_base);
+
+        // okay we presumably have the table base. scan forwards to collect the entries
+        while (true) {
+          // will advance the reader
+          ShannonMemEntry entry = new ShannonMemEntry(reader);
+
+          // discard entries that
+          if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
+              entry.getFunction() > (sec_main.getLoadAddress()+sec_main.getSize()) ||
+              entry.getFunction() < sec_main.getLoadAddress()) {
+            break;
+          }
+
+          memEntries.add(entry);
+        }
+
+        Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
+
+        for (ShannonMemEntry entry : memEntries) {
+          Msg.info(this, String.format("%s", entry.toString()));
 
           if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
             main_tcm_entry = entry;
-            break;
-          }
-
-          if (entry.getSourceAddress() > 0x50000000 || entry.getSize() >= 0x10000000 ||
-          entry.getFunction() > 0x50000000 || entry.getFunction() < 0x40010000) {
-            break;
+            // don't break so can show all of the things we aren't currently handling
+            //break;
           }
         }
 
+        Msg.warn(this, "Only the TCM relocation entry is currently supported!");
+
+        // TODO: handle all memory addresses instead of just TCM
         if (main_tcm_entry == null) {
           Msg.error(this, "Unable to find memory copy operations for TCM region");
           return false;
         }
 
         long tcm_offset = main_tcm_entry.getSourceAddress() - sec_main.getLoadAddress() + sec_main.getOffset();
+
+        Msg.info(this, "Inflating primary sections...");
 
         try {
           memory.addMergeSection("MAIN", sec_main.getLoadAddress(),

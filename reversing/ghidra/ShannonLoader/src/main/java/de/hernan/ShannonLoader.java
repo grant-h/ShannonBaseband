@@ -49,6 +49,15 @@ public class ShannonLoader extends BinaryLoader
     public static final LanguageID LANG_ID = new LanguageID("ARM:LE:32:v8");
     public static final long MAIN_TCM_ADDRESS = 0x04000000;
 
+    private MemoryBlockHelper memoryHelper = null;
+    private HashMap<String, TOCSectionHeader> headerMap = new HashMap<>();
+    private ArrayList<AddressItem> addrEntries = new ArrayList<>();
+    private ArrayList<MPUEntry> mpuEntries = new ArrayList<>();
+    private ArrayList<ShannonMemEntry> memEntries = new ArrayList<>();
+
+    private int mpuTableOffset = -1;
+    private int relocationTableOffset = -1;
+
     @Override
     public Collection<LoadSpec> findSupportedLoadSpecs(ByteProvider provider) throws IOException 
     {
@@ -127,6 +136,81 @@ public class ShannonLoader extends BinaryLoader
                     throws IOException
     {
         BinaryReader reader = new BinaryReader(provider, true);
+        memoryHelper = new MemoryBlockHelper(monitor, program, messageLog, provider, 0L);
+
+        if (!processTOCHeader(reader))
+          return false;
+
+        TOCSectionHeader sec_main = headerMap.get("MAIN");
+        TOCSectionHeader sec_boot = headerMap.get("BOOT");
+
+        if (sec_main == null || sec_boot == null) {
+          Msg.error(this, "One or more of the required sections [MAIN, BOOT] were not found");
+          return false;
+        }
+
+        PatternFinder finder = new PatternFinder(provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
+
+        if (!findShannonPatterns(finder, sec_main))
+          return false;
+
+        if (!readMPUTable(reader))
+          return false;
+
+        if (!processRelocationTable(reader))
+          return false;
+
+        ShannonMemEntry main_tcm_entry = null;
+
+        Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
+
+        for (ShannonMemEntry entry : memEntries) {
+          Msg.info(this, String.format("%s", entry.toString()));
+
+          if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
+            main_tcm_entry = entry;
+            // don't break so can show all of the things we aren't currently handling
+            //break;
+          }
+        }
+
+        Msg.warn(this, "Only the TCM relocation entry is currently supported!");
+
+        // TODO: handle all memory addresses instead of just TCM
+        if (main_tcm_entry == null) {
+          Msg.error(this, "Unable to find memory copy operations for TCM region");
+          return false;
+        }
+
+        if (!calculateShannonMemoryMap())
+          return false;
+
+        long tcm_offset = main_tcm_entry.getSourceAddress() - sec_main.getLoadAddress() + sec_main.getOffset();
+
+        Msg.info(this, "Inflating primary sections...");
+
+        try {
+          memoryHelper.addMergeSection("MAIN", sec_main.getLoadAddress(),
+              provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
+          memoryHelper.addMergeSection("MAIN_TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
+              main_tcm_entry.getSize());
+          memoryHelper.addMergeSection("BOOT", sec_boot.getLoadAddress(),
+              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize());
+
+        } catch(AddressOverflowException | AddressOutOfBoundsException e) {
+          e.printStackTrace();
+          return false;
+        }
+
+        // Ensure memory blocks are ordered from first to last.
+        // Normally they are ordered by the order they are added.
+        UIUtil.sortProgramTree(program);
+
+        return true;
+    }
+
+    private boolean processTOCHeader(BinaryReader reader)
+    {
         TOCSectionHeader tocFirst;
 
         try {
@@ -140,8 +224,6 @@ public class ShannonLoader extends BinaryLoader
             tocFirst.getSize()));
 
         long prevPointerIndex = reader.getPointerIndex();
-
-        HashMap<String, TOCSectionHeader> headerMap = new HashMap<>();
 
         while (reader.getPointerIndex() < tocFirst.getSize()) {
           try {
@@ -173,24 +255,17 @@ public class ShannonLoader extends BinaryLoader
             Msg.info(this, header.toString());
         }
 
-        // required sections
-        TOCSectionHeader sec_main = headerMap.get("MAIN");
-        TOCSectionHeader sec_boot = headerMap.get("BOOT");
-
-        if (sec_main == null || sec_boot == null) {
-          Msg.error(this, "One or more of the required sections [MAIN, BOOT] were not found");
-          return false;
-        }
-
         /* Not clear what VSS is in reality. Its not that important for Shannon security research
          * to the best of my knowledge though. More reversing needed to confirm this.
          */
         Msg.warn(this, "This loader only supports BOOT and MAIN section loading. VSS audio DSP (?) not handled");
 
-        MemoryBlockHelper memory = new MemoryBlockHelper(monitor, program, messageLog, provider, 0L);
+        return true;
 
-        PatternFinder finder = new PatternFinder(provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
+    }
 
+    private boolean findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
+    {
         /* This pattern needs explaining. An MPU entry is a table that Shannon
          * will process to populate the MPU table of the Cortex-R series CPU.
          * Each entry is 40 bytes (10 words little-endian) with this layout (each field is 4 bytes):
@@ -214,15 +289,15 @@ public class ShannonLoader extends BinaryLoader
          * \x20 - matches the size code of 0x20000 
          */
 
-        int match_mpu = finder.find("[\\x00]{8}\\x1c\\x00\\x00\\x00(....){6}\\x01\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x04\\x20");
+        mpuTableOffset = finder.find("[\\x00]{8}\\x1c\\x00\\x00\\x00(....){6}\\x01\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x04\\x20");
 
-        if (match_mpu == -1) {
+        if (mpuTableOffset == -1) {
           Msg.error(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
           return false;
         }
 
         Msg.info(this, String.format("MPU entry table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
-              match_mpu, match_mpu+sec_main.getLoadAddress()));
+              mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
 
         /* This pattern ALSO needs explaining :)
          * It matches an entry in the boot time relocation table.
@@ -242,20 +317,22 @@ public class ShannonLoader extends BinaryLoader
          * The negative offset of -4 realigns the table match address to start at the 'src' field.
          */
 
-        int match = finder.find("\\x00\\x00\\x80\\x04\\x20\\x0c\\x00\\x00", -0x4);
+        relocationTableOffset = finder.find("\\x00\\x00\\x80\\x04\\x20\\x0c\\x00\\x00", -0x4);
 
-        if (match == -1) {
+        if (relocationTableOffset == -1) {
           Msg.error(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");
           return false;
         }
 
         Msg.info(this, String.format("Boot-time relocation table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
-              match, match+sec_main.getLoadAddress()));
+              relocationTableOffset, relocationTableOffset+fromSection.getLoadAddress()));
 
-        ArrayList<AddressItem> addrEntries = new ArrayList<>();
-        ArrayList<MPUEntry> mpuEntries = new ArrayList<>();
-        ArrayList<ShannonMemEntry> memEntries = new ArrayList<>();
-        reader.setPointerIndex(sec_main.getOffset()+match_mpu);
+        return true;
+    }
+
+    private boolean readMPUTable(BinaryReader reader)
+    {
+        reader.setPointerIndex(headerMap.get("MAIN").getOffset()+mpuTableOffset);
 
         while (true) {
           try {
@@ -267,9 +344,6 @@ public class ShannonLoader extends BinaryLoader
 
             mpuEntries.add(entry);
 
-            addrEntries.add(new AddressItem(entry, false));
-            addrEntries.add(new AddressItem(entry, true));
-
           } catch (IOException e) {
             Msg.error(this, String.format("Failed read to next MPU entry %d", mpuEntries.size()));
             return false;
@@ -280,21 +354,15 @@ public class ShannonLoader extends BinaryLoader
 
         for (MPUEntry entry : mpuEntries) {
             Msg.info(this, entry.toString());
+            addrEntries.add(new AddressItem(entry, false));
+            addrEntries.add(new AddressItem(entry, true));
         }
 
-        Collections.sort(addrEntries, new Comparator<AddressItem>() {
-          public int compare(AddressItem o1, AddressItem o2) {
-            long comp = o1.getAddr() - o2.getAddr();
+        return true;
+    }
 
-            if (o1.getAddr() < o2.getAddr())
-              return -1;
-            else if (o1.getAddr() > o2.getAddr())
-              return 1;
-
-            return (o1.end ? 1 : 0) - (o2.end ? 1 : 0);
-          }
-        });
-
+    private boolean calculateShannonMemoryMap()
+    {
         // Uncomment if you are debugging MPU table entries
         /*
         for (AddressItem it : addrEntries) {
@@ -321,6 +389,19 @@ public class ShannonLoader extends BinaryLoader
 
         Msg.info(this, "==== Calculated Shannon Memory Map ====");
 
+        Collections.sort(addrEntries, new Comparator<AddressItem>() {
+          public int compare(AddressItem o1, AddressItem o2) {
+            long comp = o1.getAddr() - o2.getAddr();
+
+            if (o1.getAddr() < o2.getAddr())
+              return -1;
+            else if (o1.getAddr() > o2.getAddr())
+              return 1;
+
+            return (o1.end ? 1 : 0) - (o2.end ? 1 : 0);
+          }
+        });
+
         for (int i = 0; i < addrEntries.size()-1; i++) {
           AddressItem e = addrEntries.get(i);
           AddressItem en = addrEntries.get(i+1);
@@ -335,25 +416,38 @@ public class ShannonLoader extends BinaryLoader
           long end = en.end ? en.getAddr() : en.getAddr() - 1;
 
           if (start <= end && active.size() > 0) {
+            // get the highest slot ID as this takes precedence
             int highest_key = Collections.max(active.keySet());
             MPUEntry flags = active.get(highest_key);
             Msg.info(this, String.format("[%08x - %08x] %s", start, end, flags.toString()));
 
-            memory.addUninitializedBlock(String.format("MPU_RAM%d", i),
+            memoryHelper.addUninitializedBlock(String.format("MPU_RAM%d", i),
                 start, end-start+1, flags.isReadable(), flags.isWritable(),
                 flags.isExecutable());
           }
         }
 
-        ShannonMemEntry main_tcm_entry = null;
+        return true;
+    }
+
+    private boolean processRelocationTable(BinaryReader reader)
+    {
+        TOCSectionHeader sec_main = headerMap.get("MAIN");
 
         // this can fall into the middle of the table
         // so we need to scan backwards first
-        int table_address_base = sec_main.getOffset()+match;
+        int table_address_base = sec_main.getOffset()+relocationTableOffset;
+
+        ShannonMemEntry entry = null;
 
         while (true) {
-          reader.setPointerIndex(table_address_base);
-          ShannonMemEntry entry = new ShannonMemEntry(reader);
+          try {
+            reader.setPointerIndex(table_address_base);
+            entry = new ShannonMemEntry(reader);
+          } catch (IOException e) {
+              Msg.error(this, "Failed to read relocation table entry (backwards)");
+              return false;
+          }
 
           // discard entries that
           if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
@@ -371,8 +465,13 @@ public class ShannonLoader extends BinaryLoader
 
         // okay we presumably have the table base. scan forwards to collect the entries
         while (true) {
-          // will advance the reader
-          ShannonMemEntry entry = new ShannonMemEntry(reader);
+          try {
+            // will advance the reader
+            entry = new ShannonMemEntry(reader);
+          } catch (IOException e) {
+              Msg.error(this, "Failed to read relocation table entry (forwards)");
+              return false;
+          }
 
           // discard entries that
           if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
@@ -383,47 +482,6 @@ public class ShannonLoader extends BinaryLoader
 
           memEntries.add(entry);
         }
-
-        Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
-
-        for (ShannonMemEntry entry : memEntries) {
-          Msg.info(this, String.format("%s", entry.toString()));
-
-          if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
-            main_tcm_entry = entry;
-            // don't break so can show all of the things we aren't currently handling
-            //break;
-          }
-        }
-
-        Msg.warn(this, "Only the TCM relocation entry is currently supported!");
-
-        // TODO: handle all memory addresses instead of just TCM
-        if (main_tcm_entry == null) {
-          Msg.error(this, "Unable to find memory copy operations for TCM region");
-          return false;
-        }
-
-        long tcm_offset = main_tcm_entry.getSourceAddress() - sec_main.getLoadAddress() + sec_main.getOffset();
-
-        Msg.info(this, "Inflating primary sections...");
-
-        try {
-          memory.addMergeSection("MAIN", sec_main.getLoadAddress(),
-              provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
-          memory.addMergeSection("MAIN_TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
-              main_tcm_entry.getSize());
-          memory.addMergeSection("BOOT", sec_boot.getLoadAddress(),
-              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize());
-
-        } catch(AddressOverflowException | AddressOutOfBoundsException e) {
-          e.printStackTrace();
-          return false;
-        }
-
-        // Ensure memory blocks are ordered from first to last.
-        // Normally they are ordered by the order they are added.
-        UIUtil.sortProgramTree(program);
 
         return true;
     }

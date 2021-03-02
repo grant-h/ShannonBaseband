@@ -130,9 +130,10 @@ public class MemoryBlockHelper
           dataInput.read(data, 0, (int)dataSize);
           target.putBytes(writeStart, data);
           target.setName(name);
-          Msg.info(this, "Creating merge block");
+          Msg.info(this, String.format("Creating merge block %s -> [%08x - %08x]",
+                name, addressOffset, addressOffset+dataSize));
         } catch (NotFoundException | LockException | MemoryAccessException | IOException e) {
-          Msg.error(this, "Creating merge block failed");
+          Msg.error(this, String.format("Creating merge block %s failed", name));
           e.printStackTrace();
         }
     }

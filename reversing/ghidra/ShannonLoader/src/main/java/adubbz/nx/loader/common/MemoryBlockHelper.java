@@ -38,7 +38,6 @@ import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.mem.MemoryBlockException;
 import ghidra.program.model.mem.MemoryConflictException;
 import ghidra.util.Msg;
-import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.NotFoundException;
 import ghidra.util.task.TaskMonitor;
 
@@ -132,7 +131,7 @@ public class MemoryBlockHelper
           target.putBytes(writeStart, data);
           target.setName(name);
           Msg.info(this, "Creating merge block");
-        } catch (NotFoundException | DuplicateNameException | LockException | MemoryAccessException | IOException e) {
+        } catch (NotFoundException | LockException | MemoryAccessException | IOException e) {
           Msg.error(this, "Creating merge block failed");
           e.printStackTrace();
         }

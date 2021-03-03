@@ -16,7 +16,6 @@ import java.util.Comparator;
 import java.util.List;
 
 import adubbz.nx.loader.common.MemoryBlockHelper;
-import adubbz.nx.util.UIUtil;
 import de.hernan.TOCSectionHeader;
 import de.hernan.util.PatternFinder;
 
@@ -39,8 +38,10 @@ import ghidra.program.model.lang.Language;
 import ghidra.program.model.lang.LanguageCompilerSpecPair;
 import ghidra.program.model.lang.LanguageID;
 import ghidra.program.model.listing.Program;
+import ghidra.program.database.ProgramDB;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.task.TaskMonitor;
 
 public class ShannonLoader extends BinaryLoader 
@@ -202,11 +203,28 @@ public class ShannonLoader extends BinaryLoader
           return false;
         }
 
-        // Ensure memory blocks are ordered from first to last.
-        // Normally they are ordered by the order they are added.
-        UIUtil.sortProgramTree(program);
+        syncProgramTreeWithMemoryMap(program);
 
         return true;
+    }
+
+    private void syncProgramTreeWithMemoryMap(Program program)
+    {
+        // A hack to sync the ProgramTree view and the memory map
+        // Apparently these are different and once the ProgramTree is created,
+        // renaming memory map items won't sync the changes
+
+        try {
+          ProgramDB db = (ProgramDB)program;
+
+          if (db.getTreeManager().getRootModule("Program Tree") == null)
+              return;
+
+          db.getTreeManager().removeTree("Program Tree");
+          db.getTreeManager().createRootModule("Program Tree");
+
+        } catch (DuplicateNameException e) {
+        }
     }
 
     private boolean processTOCHeader(BinaryReader reader)

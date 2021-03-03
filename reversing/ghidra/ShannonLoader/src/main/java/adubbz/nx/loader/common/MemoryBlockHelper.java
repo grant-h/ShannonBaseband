@@ -32,6 +32,7 @@ import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressRangeImpl;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
@@ -43,142 +44,119 @@ import ghidra.util.task.TaskMonitor;
 
 public class MemoryBlockHelper 
 {
-    private TaskMonitor monitor;
     private Program program;
-    private ByteProvider byteProvider;
     private MessageLog log;
     private long baseAddress;
     
-    private List<String> sectionsToInit = new ArrayList<>();
-
-    public MemoryBlockHelper(TaskMonitor monitor, Program program, MessageLog log, ByteProvider byteProvider, long baseAddress)
+    public MemoryBlockHelper(Program program, MessageLog log, long baseAddress)
     {
-        this.monitor = monitor;
         this.program = program;
         this.log = log;
-        this.byteProvider = byteProvider;
         this.baseAddress = baseAddress;
     }
 
-    public MemoryBlock addManualDeferredSection(String name, long addressOffset, InputStream dataInput, long dataSize, boolean read, boolean write, boolean execute)
-    {
-        AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
-        MemoryBlock mb = null;
-        
-        try 
-        {
-            mb = MemoryBlockUtils.createUninitializedBlock(program, false, name, addressSpace.getAddress(this.baseAddress + addressOffset), dataSize, "", null, read, write, execute, this.log);
-            
-            if (mb == null)
-            {
-                Msg.error(this, "error");
-            }
-        } 
-        catch (AddressOutOfBoundsException e) 
-        {
-            e.printStackTrace();
-        }
-        
-        return mb;
-    }
-
-    public void addUninitializedBlock(String name, long addressOffset, long dataSize, boolean read, boolean write, boolean execute)
+    public boolean addUninitializedBlock(String name, long addressOffset, long dataSize, boolean read, boolean write, boolean execute)
     {
         try {
           AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
           MemoryBlockUtils.createUninitializedBlock(program, false, name, addressSpace.getAddress(this.baseAddress + addressOffset), dataSize, "", null, read, write, execute, this.log);
+          return true;
         } catch (AddressOutOfBoundsException e) {
             e.printStackTrace();
+            return false;
         }
-    }
-    
-    public void addDeferredSection(String name, long addressOffset, InputStream dataInput, long dataSize, boolean read, boolean write, boolean execute)
-    {
-        MemoryBlock mb = this.addManualDeferredSection(name, addressOffset, dataInput, dataSize, read, write, execute);
-        
-        if (mb != null)
-        {
-            this.sectionsToInit.add(mb.getName());
-        }
-    }
-    
-    public void addSection(String name, long addressOffset, InputStream dataInput, long dataSize, boolean read, boolean write, boolean execute) throws AddressOverflowException, AddressOutOfBoundsException
-    {
-        AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
-        MemoryBlockUtils.createInitializedBlock(this.program, true, name, addressSpace.getAddress(this.baseAddress + addressOffset), dataInput, dataSize, "", null, read, write, execute, this.log, this.monitor);
     }
 
-    public void addMergeSection(String name, long addressOffset, InputStream dataInput, long dataSize) throws AddressOverflowException, AddressOutOfBoundsException
+    public boolean addMergeSection(String name, long addressOffset, InputStream dataInput, long dataSize) throws AddressOverflowException, AddressOutOfBoundsException
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
         Address writeStart = addressSpace.getAddress(this.baseAddress + addressOffset);
+        Address writeEnd = writeStart.add(dataSize);
+        Address writePtr = writeStart;
 
         Memory memory = this.program.getMemory();
-        MemoryBlock target = memory.getBlock(writeStart);
 
-        // no section to merge with, fallback to just adding a new block
-        if (target == null) {
-          addSection(name, addressOffset, dataInput, dataSize, true, true, true);
-          return;
-        }
+        // Adding a merge section may include adding bytes to more than one existing
+        // block as different MPU permissions will exist
+
+        Msg.info(this, String.format("Creating merge block %s -> [%08x - %08x]",
+              name, addressOffset, addressOffset+dataSize));
+
+        int chunkNum = 0;
+        long dataPtr = 0;
+
+        byte [] data = new byte[(int)dataSize];
 
         try {
-          if (!target.isInitialized())
-            memory.convertToInitialized(target, (byte)0);
-
-          byte [] data = new byte[(int)dataSize];
           dataInput.read(data, 0, (int)dataSize);
-          target.putBytes(writeStart, data);
-          target.setName(name);
-          Msg.info(this, String.format("Creating merge block %s -> [%08x - %08x]",
-                name, addressOffset, addressOffset+dataSize));
-        } catch (NotFoundException | LockException | MemoryAccessException | IOException e) {
-          Msg.error(this, String.format("Creating merge block %s failed", name));
+        } catch (IOException e) {
           e.printStackTrace();
+          return false;
         }
-    }
-    
-    public void finalizeSection(String name) throws LockException, NotFoundException, MemoryAccessException, IOException
-    {
-        Memory memory = this.program.getMemory();
-        Msg.info(this, "Attempting to manually finalize " + name);
-        
-        for (MemoryBlock block : memory.getBlocks())
-        {
-            if (block.getName().equals(name))
-            {
-                Msg.info(this, "Manually finalizing " + name);
-                memory.convertToInitialized(block, (byte)0);
-                byte[] data = this.byteProvider.readBytes(block.getStart().getOffset() - this.baseAddress, block.getSize());
-                block.putBytes(block.getStart(), data);
+
+        while (dataPtr < dataSize) {
+          MemoryBlock currentBlock = memory.getBlock(writePtr);
+
+          if (currentBlock == null) {
+            Msg.error(this, String.format("No existing MPU block found for address write at %s", writePtr));
+            return false;
+          }
+
+          if (currentBlock.getStart().compareTo(writePtr) != 0) {
+            Msg.info(this, String.format("Split block @ %s", writePtr));
+
+            try {
+              memory.split(currentBlock, writePtr);
+            } catch (NotFoundException | LockException | MemoryBlockException e) {
+              Msg.error(this, String.format("Creating merge block split %s failed", name));
+              e.printStackTrace();
+              return false;
             }
+
+            // get new split block
+            currentBlock = memory.getBlock(writePtr);
+          }
+
+          long amtToWrite = Math.min(currentBlock.getEnd().subtract(writePtr) + 1, dataSize-dataPtr);
+
+          try {
+            if (!currentBlock.isInitialized())
+              memory.convertToInitialized(currentBlock, (byte)0);
+
+            String blockName = String.format("%s_%d_%s",
+                name, chunkNum, memoryPermissions(currentBlock));
+            Msg.info(this, String.format("==> SetBytes %s [%s - %s] 0x%08x bytes @ %s",
+                  blockName, currentBlock.getStart(), currentBlock.getEnd(), amtToWrite, writePtr));
+
+            memory.setBytes(writePtr, data, (int)dataPtr, (int)amtToWrite);
+            currentBlock.setName(blockName);
+
+            writePtr = writePtr.add(amtToWrite);
+            dataPtr += amtToWrite;
+            chunkNum++;
+          } catch (NotFoundException | LockException | MemoryAccessException e) {
+            Msg.error(this, String.format("Creating merge block %s failed", name));
+            e.printStackTrace();
+            // TODO: raise error
+            return false;
+          }
         }
+
+        return true;
     }
-    
-    public void finalizeSections() throws LockException, NotFoundException, MemoryAccessException, IOException
+
+    private String memoryPermissions(MemoryBlock block)
     {
-        Memory memory = this.program.getMemory();
-        
-        for (MemoryBlock block : memory.getBlocks())
-        {
-            if (this.sectionsToInit.contains(block.getName()))
-            {
-                memory.convertToInitialized(block, (byte)0);
-                byte[] data = this.byteProvider.readBytes(block.getStart().getOffset() - this.baseAddress, block.getSize());
-                block.putBytes(block.getStart(), data);
-            }
-        }
-    }
-    
-    private class DeferredInitSection
-    {
-        private MemoryBlock block;
-        private InputStream dataInput;
-        
-        public DeferredInitSection(MemoryBlock block, InputStream dataInput)
-        {
-            this.block = block;
-            this.dataInput = dataInput;
-        }
+      String perms = "";
+      int flags = block.getPermissions();
+
+      if ((flags & MemoryBlock.READ) != 0)
+        perms += "R";
+      if ((flags & MemoryBlock.WRITE) != 0)
+        perms += "W";
+      if ((flags & MemoryBlock.EXECUTE) != 0)
+        perms += "X";
+
+      return perms;
     }
 }

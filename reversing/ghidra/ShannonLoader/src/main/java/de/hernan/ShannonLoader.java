@@ -137,7 +137,7 @@ public class ShannonLoader extends BinaryLoader
                     throws IOException
     {
         BinaryReader reader = new BinaryReader(provider, true);
-        memoryHelper = new MemoryBlockHelper(monitor, program, messageLog, provider, 0L);
+        memoryHelper = new MemoryBlockHelper(program, messageLog, 0L);
 
         if (!processTOCHeader(reader))
           return false;
@@ -191,12 +191,21 @@ public class ShannonLoader extends BinaryLoader
         Msg.info(this, "Inflating primary sections...");
 
         try {
-          memoryHelper.addMergeSection("MAIN", sec_main.getLoadAddress(),
-              provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
-          memoryHelper.addMergeSection("MAIN_TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
-              main_tcm_entry.getSize());
-          memoryHelper.addMergeSection("BOOT", sec_boot.getLoadAddress(),
-              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize());
+          if (!memoryHelper.addMergeSection("TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
+              main_tcm_entry.getSize()))
+            return false;
+
+          if (!memoryHelper.addMergeSection("BOOT_MIRROR", 0L,
+              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize()))
+            return false;
+
+          if (!memoryHelper.addMergeSection("BOOT", sec_boot.getLoadAddress(),
+              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize()))
+            return false;
+
+          if (!memoryHelper.addMergeSection("MAIN", sec_main.getLoadAddress(),
+              provider.getInputStream(sec_main.getOffset()), sec_main.getSize()))
+            return false;
 
         } catch(AddressOverflowException | AddressOutOfBoundsException e) {
           e.printStackTrace();
@@ -282,6 +291,7 @@ public class ShannonLoader extends BinaryLoader
 
     }
 
+    // TODO: add label and types to tables
     private boolean findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
     {
         /* This pattern needs explaining. An MPU entry is a table that Shannon
@@ -439,9 +449,13 @@ public class ShannonLoader extends BinaryLoader
             MPUEntry flags = active.get(highest_key);
             Msg.info(this, String.format("[%08x - %08x] %s", start, end, flags.toString()));
 
-            memoryHelper.addUninitializedBlock(String.format("MPU_RAM%d", i),
+            String name = String.format("RAM_MPU%d", i);
+            if (!memoryHelper.addUninitializedBlock(name,
                 start, end-start+1, flags.isReadable(), flags.isWritable(),
-                flags.isExecutable());
+                flags.isExecutable())) {
+              Msg.error(this, String.format("Failed to create MPU block %s", name));
+              return false;
+            }
           }
         }
 

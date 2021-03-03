@@ -37,11 +37,11 @@ import ghidra.program.model.lang.CompilerSpecID;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.lang.LanguageCompilerSpecPair;
 import ghidra.program.model.lang.LanguageID;
-import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.*;
 import ghidra.program.database.ProgramDB;
+import ghidra.program.database.module.TreeManager;
 import ghidra.util.Msg;
-import ghidra.util.exception.CancelledException;
-import ghidra.util.exception.DuplicateNameException;
+import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
 
 public class ShannonLoader extends BinaryLoader 
@@ -188,7 +188,7 @@ public class ShannonLoader extends BinaryLoader
 
         long tcm_offset = main_tcm_entry.getSourceAddress() - sec_main.getLoadAddress() + sec_main.getOffset();
 
-        Msg.info(this, "Inflating primary sections...");
+        Msg.info(this, "==== Inflating primary sections ====");
 
         try {
           if (!memoryHelper.addMergeSection("TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
@@ -212,7 +212,10 @@ public class ShannonLoader extends BinaryLoader
           return false;
         }
 
+        Msg.info(this, "==== Finalizing program trees ====");
+
         syncProgramTreeWithMemoryMap(program);
+        organizeProgramTree(program);
 
         return true;
     }
@@ -224,16 +227,50 @@ public class ShannonLoader extends BinaryLoader
         // renaming memory map items won't sync the changes
 
         try {
+          // Note that ProgramDB is considered "private" so this can break at any time
           ProgramDB db = (ProgramDB)program;
+          TreeManager tree = db.getTreeManager();
 
-          if (db.getTreeManager().getRootModule("Program Tree") == null)
+          if (tree.getRootModule(TreeManager.DEFAULT_TREE_NAME) == null)
               return;
 
-          db.getTreeManager().removeTree("Program Tree");
-          db.getTreeManager().createRootModule("Program Tree");
+          tree.removeTree(TreeManager.DEFAULT_TREE_NAME);
+          tree.createRootModule(TreeManager.DEFAULT_TREE_NAME);
 
         } catch (DuplicateNameException e) {
+          Msg.warn(this, "Unable to sync program tree to memory map");
         }
+    }
+
+    private void organizeProgramTree(Program program)
+    {
+      //ProgramModule root = program.getListing().getDefaultRootModule();
+      try {
+        ProgramModule root = program.getListing().createRootModule("Categorized");
+
+        String [] sectionName = {"Low", "Mid", "High"};
+        long [] sectionBound = {0x40000000L, 0x80000000L, 0x100000000L};
+
+        for (int i = 0; i < sectionName.length; i++) {
+            ProgramModule newSection = root.createModule(sectionName[i]);
+            Group[] children = root.getChildren();
+
+            for (Group child : children) {
+              if (child instanceof ProgramFragment) {
+                ProgramFragment frag = (ProgramFragment)child;
+
+                if (frag.getMinAddress().getUnsignedOffset() < sectionBound[i]) {
+                  newSection.reparent(frag.getName(), root);
+                  Msg.info(this, String.format("[%s - %s] %s (%s)",
+                         frag.getMinAddress(), frag.getMaxAddress(), frag.getName(), sectionName[i]));
+                }
+              }
+            }
+        }
+      } catch (DuplicateNameException | NotFoundException e) {
+        Msg.warn(this, "Failed to create categorized tree. Continuing...");
+        e.printStackTrace();
+      }
     }
 
     private boolean processTOCHeader(BinaryReader reader)

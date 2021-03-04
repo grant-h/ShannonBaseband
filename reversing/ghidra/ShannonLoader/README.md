@@ -1,6 +1,7 @@
 ## ShannonLoader
 
-A GHIDRA loader for Samsung's ``Shannon'' modem binaries. These modem binaries can be found in Samsung factory firmware images within tar files like `CP_G973FXXU3ASG8_CP13372649_CL16487963_QB24948473_REV01_user_low_ship.tar.md5`. Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`. Load `modem.bin` using GHIDRA after installing this extension.
+A GHIDRA loader for Samsung's "Shannon" modem binaries. These modem binaries can be found in Samsung factory firmware images within tar files like `CP_G973FXXU3ASG8_CP13372649_CL16487963_QB24948473_REV01_user_low_ship.tar.md5`.
+Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`. Load `modem.bin` using GHIDRA after installing this extension.
 
 ## Notable Features
 * Image-agnostic run-time copy table processing (for a more accurate static modem image)

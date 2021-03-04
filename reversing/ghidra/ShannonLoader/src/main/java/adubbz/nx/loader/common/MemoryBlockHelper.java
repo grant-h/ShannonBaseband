@@ -67,6 +67,18 @@ public class MemoryBlockHelper
         }
     }
 
+    public boolean addInitializedBlock(String name, long addressOffset, InputStream dataInput, long dataSize, boolean read, boolean write, boolean execute)
+    {
+        try {
+          AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
+          MemoryBlockUtils.createInitializedBlock(program, false, name, addressSpace.getAddress(this.baseAddress + addressOffset), dataInput, dataSize, "", null, read, write, execute, this.log, null);
+          return true;
+        } catch (AddressOutOfBoundsException | AddressOverflowException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
     public boolean addMergeSection(String name, long addressOffset, InputStream dataInput, long dataSize) throws AddressOverflowException, AddressOutOfBoundsException
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();

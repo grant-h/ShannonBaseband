@@ -18,6 +18,7 @@ import java.util.List;
 import adubbz.nx.loader.common.MemoryBlockHelper;
 import de.hernan.TOCSectionHeader;
 import de.hernan.util.PatternFinder;
+import de.hernan.util.ByteCharSequence;
 
 import ghidra.app.util.Option;
 import ghidra.app.util.bin.BinaryReader;
@@ -152,65 +153,52 @@ public class ShannonLoader extends BinaryLoader
 
         PatternFinder finder = new PatternFinder(provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
 
-        if (!findShannonPatterns(finder, sec_main))
-          return false;
+        // purely informational for now
+        discoverSocVersion(finder);
 
-        if (!readMPUTable(reader))
-          return false;
+        findShannonPatterns(finder, sec_main);
 
-        if (!processRelocationTable(reader))
-          return false;
+        if (mpuTableOffset != -1) {
+          if (!readMPUTable(reader))
+            return false;
 
-        ShannonMemEntry main_tcm_entry = null;
+          if (!calculateShannonMemoryMap())
+            return false;
+        }
 
-        Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
 
-        for (ShannonMemEntry entry : memEntries) {
-          Msg.info(this, String.format("%s", entry.toString()));
+        if (relocationTableOffset != -1) {
+          if (!processRelocationTable(reader))
+            return false;
 
-          if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
-            main_tcm_entry = entry;
-            // don't break so can show all of the things we aren't currently handling
-            //break;
+          ShannonMemEntry main_tcm_entry = null;
+
+          Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
+
+          for (ShannonMemEntry entry : memEntries) {
+            Msg.info(this, String.format("%s", entry.toString()));
+
+            if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
+              main_tcm_entry = entry;
+              // don't break so can show all of the things we aren't currently handling
+              //break;
+            }
           }
+
+          Msg.warn(this, "Only the TCM relocation entry is currently supported!");
+
+          // TODO: handle all memory addresses instead of just TCM
+          if (main_tcm_entry == null) {
+            Msg.error(this, "Unable to find memory copy operations for TCM region");
+            return false;
+          }
+
+          if (!addMergeSection(provider, main_tcm_entry, "TCM"))
+            return false;
         }
 
-        Msg.warn(this, "Only the TCM relocation entry is currently supported!");
-
-        // TODO: handle all memory addresses instead of just TCM
-        if (main_tcm_entry == null) {
-          Msg.error(this, "Unable to find memory copy operations for TCM region");
+        if (!loadBasicTOCSections(provider, sec_boot, sec_main))
           return false;
-        }
-
-        if (!calculateShannonMemoryMap())
-          return false;
-
-        long tcm_offset = main_tcm_entry.getSourceAddress() - sec_main.getLoadAddress() + sec_main.getOffset();
-
-        Msg.info(this, "==== Inflating primary sections ====");
-
-        try {
-          if (!memoryHelper.addMergeSection("TCM", MAIN_TCM_ADDRESS,  provider.getInputStream(tcm_offset),
-              main_tcm_entry.getSize()))
-            return false;
-
-          if (!memoryHelper.addMergeSection("BOOT_MIRROR", 0L,
-              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize()))
-            return false;
-
-          if (!memoryHelper.addMergeSection("BOOT", sec_boot.getLoadAddress(),
-              provider.getInputStream(sec_boot.getOffset()), sec_boot.getSize()))
-            return false;
-
-          if (!memoryHelper.addMergeSection("MAIN", sec_main.getLoadAddress(),
-              provider.getInputStream(sec_main.getOffset()), sec_main.getSize()))
-            return false;
-
-        } catch(AddressOverflowException | AddressOutOfBoundsException e) {
-          e.printStackTrace();
-          return false;
-        }
 
         Msg.info(this, "==== Finalizing program trees ====");
 
@@ -218,6 +206,57 @@ public class ShannonLoader extends BinaryLoader
         organizeProgramTree(program);
 
         return true;
+    }
+
+    private boolean loadBasicTOCSections(ByteProvider provider, TOCSectionHeader sec_boot, TOCSectionHeader sec_main)
+    {
+        Msg.info(this, "==== Inflating primary sections ====");
+
+        if (sec_boot.getLoadAddress() != 0L) {
+          if (!addMergeSection(provider, sec_boot, "BOOT_MIRROR", 0L))
+            return false;
+        }
+
+        if (!addMergeSection(provider, sec_boot))
+          return false;
+
+        if (!addMergeSection(provider, sec_main))
+          return false;
+
+        return true;
+    }
+
+    private boolean addMergeSection(ByteProvider provider, TOCSectionHeader section)
+    {
+        return addMergeSection(provider, section, section.getName(), section.getLoadAddress());
+    }
+
+    private boolean addMergeSection(ByteProvider provider, ShannonMemEntry entry, String name)
+    {
+        return addMergeSection(provider, entry.getSourceFileOffset(), name, entry.getDestinationAddress(), entry.getSize());
+    }
+
+    private boolean addMergeSection(ByteProvider provider, TOCSectionHeader section, String name, long loadAddress)
+    {
+        return addMergeSection(provider, section.getOffset(), name, loadAddress, section.getSize());
+    }
+
+    private boolean addMergeSection(ByteProvider provider, long offset, String name, long loadAddress, long size)
+    {
+        try {
+          if (mpuEntries.size() == 0) {
+            Msg.warn(this, String.format("No memory map recovered. Falling back to TOC-only load for section %s",
+                  name));
+            return memoryHelper.addInitializedBlock(name, loadAddress, provider.getInputStream(offset), size,
+                true, true, true);
+          } else {
+            return memoryHelper.addMergeSection(name, loadAddress,
+                provider.getInputStream(offset), size);
+          }
+        } catch (AddressOverflowException | AddressOutOfBoundsException | IOException e) {
+          e.printStackTrace();
+          return false;
+        }
     }
 
     private void syncProgramTreeWithMemoryMap(Program program)
@@ -347,7 +386,7 @@ public class ShannonLoader extends BinaryLoader
     }
 
     // TODO: add label and types to tables
-    private boolean findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
+    private void findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
     {
         /* This pattern needs explaining. An MPU entry is a table that Shannon
          * will process to populate the MPU table of the Cortex-R series CPU.
@@ -375,12 +414,11 @@ public class ShannonLoader extends BinaryLoader
         mpuTableOffset = finder.find("[\\x00]{8}\\x1c\\x00\\x00\\x00(....){6}\\x01\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x04\\x20");
 
         if (mpuTableOffset == -1) {
-          Msg.error(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
-          return false;
+          Msg.warn(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
+        } else {
+          Msg.info(this, String.format("MPU entry table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
+                mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
         }
-
-        Msg.info(this, String.format("MPU entry table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
-              mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
 
         /* This pattern ALSO needs explaining :)
          * It matches an entry in the boot time relocation table.
@@ -403,14 +441,11 @@ public class ShannonLoader extends BinaryLoader
         relocationTableOffset = finder.find("\\x00\\x00\\x80\\x04\\x20\\x0c\\x00\\x00", -0x4);
 
         if (relocationTableOffset == -1) {
-          Msg.error(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");
-          return false;
+          Msg.warn(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");
+        } else {
+          Msg.info(this, String.format("Boot-time relocation table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
+                relocationTableOffset, relocationTableOffset+fromSection.getLoadAddress()));
         }
-
-        Msg.info(this, String.format("Boot-time relocation table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
-              relocationTableOffset, relocationTableOffset+fromSection.getLoadAddress()));
-
-        return true;
     }
 
     private boolean readMPUTable(BinaryReader reader)
@@ -530,7 +565,7 @@ public class ShannonLoader extends BinaryLoader
         while (true) {
           try {
             reader.setPointerIndex(table_address_base);
-            entry = new ShannonMemEntry(reader);
+            entry = new ShannonMemEntry(reader, sec_main);
           } catch (IOException e) {
               Msg.error(this, "Failed to read relocation table entry (backwards)");
               return false;
@@ -554,7 +589,7 @@ public class ShannonLoader extends BinaryLoader
         while (true) {
           try {
             // will advance the reader
-            entry = new ShannonMemEntry(reader);
+            entry = new ShannonMemEntry(reader, sec_main);
           } catch (IOException e) {
               Msg.error(this, "Failed to read relocation table entry (forwards)");
               return false;

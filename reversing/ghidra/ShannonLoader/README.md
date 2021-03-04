@@ -1,11 +1,20 @@
 ## ShannonLoader
 
 A GHIDRA loader for Samsung's "Shannon" modem binaries. These modem binaries can be found in Samsung factory firmware images within tar files like `CP_G973FXXU3ASG8_CP13372649_CL16487963_QB24948473_REV01_user_low_ship.tar.md5`.
-Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`. Load `modem.bin` using GHIDRA after installing this extension.
+Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`. Load `modem.bin` using GHIDRA after installing this extension. Modem files may be compressed using lz4 - be sure to decompress them using `lz4 -d modem.bin.lz4` before loading. Some older Cortex-R modem images (<2014) have only modem.bin.
 
-## Notable Features
-* Image-agnostic run-time copy table processing (for a more accurate static modem image)
+## Baseband Support
+
+* TOC Header parsing and sectioning
+* SoC version detection
+
+### Cortex-R SoC (Pre-5G basebands)
 * Image-agnostic MPU table extraction for an accurate memory map
+* Image-agnostic boot time relocation table processing (for a more accurate static modem image)
+
+### Cortex-A SoC (5G and above basebands)
+* Only basic TOC extraction support at the moment
+* Roadmap: MMU map recovery
 
 ## Building
 - Ensure you have ``JAVA_HOME`` set to the path of your JDK 11 installation (the default).

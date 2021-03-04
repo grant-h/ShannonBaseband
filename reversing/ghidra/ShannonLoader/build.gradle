@@ -60,7 +60,8 @@ dependencies {
 }
 
 task buildExtension (type: Zip, overwrite: true) {
-    baseName "${project.name}-${project.version}-${getGitHash()}-Ghidra_${ghidra_version}".replace(' ', '_')
+    String hash = "${getGitHash()}"
+    baseName "${project.name}-${project.version}-${hash}-Ghidra_${ghidra_version}".replace(' ', '_')
     extension 'zip'
     destinationDir DISTRIBUTION_DIR
     version ''
@@ -77,6 +78,8 @@ task buildExtension (type: Zip, overwrite: true) {
         String name = "${project.name}"
         filter (ReplaceTokens, tokens: [extversion: version])
         filter (ReplaceTokens, tokens: [extname: name])
+        filter (ReplaceTokens, tokens: [projectversion: project.version])
+        filter (ReplaceTokens, tokens: [projecthash: hash])
         into PATH_IN_ZIP
     }
 

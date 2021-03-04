@@ -15,8 +15,7 @@ public class PatternFinder {
   }
 
   public int find(String pattern, int offset) {
-    Pattern reg = Pattern.compile(pattern);
-    Matcher m = reg.matcher(new ByteCharSequence(this.content));
+    Matcher m = match(pattern);
 
     if (!m.find())
       return -1;
@@ -26,6 +25,11 @@ public class PatternFinder {
 
   public int find(String pattern) {
     return find(pattern, 0);
+  }
+
+  public Matcher match(String pattern) {
+    Pattern reg = Pattern.compile(pattern, Pattern.COMMENTS | Pattern.DOTALL | Pattern.MULTILINE);
+    return reg.matcher(new ByteCharSequence(this.content));
   }
 }
 

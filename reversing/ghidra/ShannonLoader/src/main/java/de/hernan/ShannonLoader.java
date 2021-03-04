@@ -273,6 +273,24 @@ public class ShannonLoader extends BinaryLoader
       }
     }
 
+    private void discoverSocVersion(PatternFinder finder)
+    {
+        java.util.regex.Matcher socFields =
+        finder.match("(?<SOC>[S][0-9]{3,}(AP)) # SOC-ID\n" +
+                    ".{0,10}                   # garbage or unknown (usually underscores)\n" +
+                    "(?<date>[0-9]{8})         # Date as YYYYMMDD (for rough SoC revision)\n" +
+                    "[^\\x00]*                 # null terminator");
+
+        if (!socFields.find()) {
+          Msg.warn(this, "Unable to find version string in MAIN section");
+        }
+
+        String soc = socFields.group("SOC");
+        String socDate = socFields.group("date");
+
+        Msg.info(this, String.format("Extracted SoC information: SOC %s, revision %s", soc, socDate));
+    }
+
     private boolean processTOCHeader(BinaryReader reader)
     {
         TOCSectionHeader tocFirst;

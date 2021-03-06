@@ -1,0 +1,42 @@
+name: Build and test ShannonLoader
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reversing/ghidra/ShannonLoader
+        
+    env:
+      GHIDRA_INSTALL_DIR: ./ghidra_9.2.2_PUBLIC
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/checkout@v2
+      with:
+        repository: grant-h/ShannonFirmware
+        path: reversing/ghidra/ShannonLoader
+    - name: Installing JDK
+      uses: actions/setup-java@v1
+      with:
+        java-version: 11
+    - name: Get Ghidra 9.2.2
+      run: wget https://ghidra-sre.org/ghidra_9.2.2_PUBLIC_20201229.zip
+    - name: Unzip Ghidra
+      run: unzip ghidra_9.2.2_PUBLIC_20201229.zip
+
+    - name: Build extension
+      run: ./gradlew build
+      
+    - name: Install extension to Ghidra
+      run: unzip ./dist/ShannonLoader-*.zip -d ./ghidra_9.2.2_PUBLIC/Ghidra/Extensions
+      
+  #  - name: Test Ghidra Headless
+   #   run: ./ghidra_9.2.2_PUBLIC/support/analyzeHeadless /tmp/ testproject -loader ShannonLoader -noanalysis -overwrite -import ./ShannonFirmware/G800FXXU1CQB3_G800FOJV1CQB2_G800FXXU1CQB2_HOME_modem.bin

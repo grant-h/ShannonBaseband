@@ -110,6 +110,10 @@ task buildExtension (type: Zip, overwrite: true) {
         exclude '.antProperties.xml'
         exclude 'eclipse/**'
         exclude 'project/**'
+        exclude '*.zip'
+        exclude 'ghidra_*/'
+        exclude 'ShannonFirmware/'
+        exclude 'scripts/'
 
         into PATH_IN_ZIP
     }

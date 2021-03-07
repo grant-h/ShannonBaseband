@@ -22,7 +22,7 @@ jobs:
     - uses: actions/checkout@v2
       with:
         repository: grant-h/ShannonFirmware
-        path: reversing/ghidra/ShannonLoader
+        path: reversing/ghidra/ShannonLoader/ShannonFirmware
     - name: Installing JDK
       uses: actions/setup-java@v1
       with:
@@ -30,10 +30,10 @@ jobs:
     - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
       run: wget -q https://ghidra-sre.org/${GHIDRA_VERSION}_20201229.zip
     - name: Unzip Ghidra
-      run: unzip ${GHIDRA_VERSION}_20201229.zip
+      run: unzip -q ${GHIDRA_VERSION}_20201229.zip
     - name: Build and pack extension
       run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./gradlew
     - name: Install extension to Ghidra
       run: unzip ./dist/ShannonLoader-*.zip -d ./${GHIDRA_VERSION}/Ghidra/Extensions
     - name: Test loader on firmware corpus
-      run: ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ShannonFirmware/modem_files
+      run: ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ./ShannonFirmware/modem_files

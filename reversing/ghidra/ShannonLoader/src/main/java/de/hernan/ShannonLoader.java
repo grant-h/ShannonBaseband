@@ -217,11 +217,22 @@ public class ShannonLoader extends BinaryLoader
             return false;
         }
 
-        if (!addMergeSection(provider, sec_boot))
-          return false;
+        List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
+        Collections.sort(headerList, (o1, o2) -> o1.getLoadAddress() - o2.getLoadAddress());
 
-        if (!addMergeSection(provider, sec_main))
-          return false;
+        for (TOCSectionHeader header : headerList) {
+            // informative section such as OFFSET
+            if (header.getLoadAddress() == 0) {
+              Msg.warn(this, String.format("%s: Skipping entry - zero load address",
+                  header.getName()));
+              continue;
+            }
+
+            Msg.info(this, String.format("%s: %s", header.getName(), header.toString()));
+
+            if (!addMergeSection(provider, header))
+              return false;
+        }
 
         return true;
     }
@@ -243,9 +254,28 @@ public class ShannonLoader extends BinaryLoader
 
     private boolean addMergeSection(ByteProvider provider, long offset, String name, long loadAddress, long size)
     {
+        // NV section has no data, just stored as a name
+        if (offset == 0L) {
+          if (!memoryHelper.blockExists(loadAddress)) {
+            Msg.info(this, String.format("%s: TOC rename of 0x%08x requested, but no backing block. Creating RWX block...",
+                name, loadAddress));
+
+            // dont hard fail as these informative blocks
+            if (!memoryHelper.addUninitializedBlock(name, loadAddress,
+                  size, true, true, true)) {
+              Msg.warn(this, String.format("%s: Failed to create backing block for address rename", name));
+            }
+          }
+
+          // dont fail on simple renames
+          memoryHelper.renameBlock(name, loadAddress);
+
+          return true;
+        }
+
         try {
-          if (mpuEntries.size() == 0) {
-            Msg.warn(this, String.format("No memory map recovered. Falling back to TOC-only load for section %s",
+          if (!memoryHelper.blockExists(loadAddress)) {
+            Msg.warn(this, String.format("%s: No backing MPU entry. Falling back to RWX permissions",
                   name));
             return memoryHelper.addInitializedBlock(name, loadAddress, provider.getInputStream(offset), size,
                 true, true, true);
@@ -371,16 +401,11 @@ public class ShannonLoader extends BinaryLoader
         Msg.info(this, String.format("==== Found %d TOC sections ====", headerMap.size()));
 
         List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
-        Collections.sort(headerList, (o1, o2) -> o1.getOffset() - o2.getOffset());
+        Collections.sort(headerList, (o1, o2) -> o1.getLoadAddress() - o2.getLoadAddress());
 
         for (TOCSectionHeader header : headerList) {
             Msg.info(this, header.toString());
         }
-
-        /* Not clear what VSS is in reality. Its not that important for Shannon security research
-         * to the best of my knowledge though. More reversing needed to confirm this.
-         */
-        Msg.warn(this, "This loader only supports BOOT and MAIN section loading. VSS audio DSP (?) not handled");
 
         return true;
 

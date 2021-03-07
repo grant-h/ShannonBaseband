@@ -36,4 +36,4 @@ jobs:
     - name: Install extension to Ghidra
       run: unzip ./dist/ShannonLoader-*.zip -d ./${GHIDRA_VERSION}/Ghidra/Extensions
     - name: Test loader on firmware corpus
-      run: ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ./ShannonFirmware/modem_files
+      run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ./ShannonFirmware/modem_files

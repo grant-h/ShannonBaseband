@@ -1,4 +1,4 @@
-# Samsung's Shannon Baseband Tool Repository
+# Samsung's Shannon Baseband Tool Repository [![Build and test ShannonLoader](https://github.com/grant-h/ShannonBaseband/actions/workflows/ShannonLoader.yml/badge.svg)](https://github.com/grant-h/ShannonBaseband/actions/workflows/ShannonLoader.yml)
 
 Scripts, tools, and information to help reverse engineer Samsung's EXYNOS cellular baseband platform, codenamed Shannon.
 These tools were released for the talk ["Emulating Samsung's Shannon Baseband for Security Testing"](https://www.blackhat.com/us-20/briefings/schedule/#emulating-samsungs-baseband-for-security-testing-20564) at Black Hat USA'2020, August 5th.

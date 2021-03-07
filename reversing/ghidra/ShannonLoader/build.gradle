@@ -99,6 +99,8 @@ task buildExtension (type: Zip, overwrite: true) {
         exclude 'dist/**'
         exclude 'bin/**'
         exclude 'src/**'
+        exclude '.*.swp'
+        exclude '.*.swo'
         exclude '.gradle/**'
         exclude 'gradle/**'
         exclude 'gradlew'

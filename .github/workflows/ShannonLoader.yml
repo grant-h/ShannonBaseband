@@ -15,7 +15,7 @@ jobs:
         working-directory: reversing/ghidra/ShannonLoader
         
     env:
-      ghidra-version: ghidra_9.2.2_PUBLIC
+      GHIDRA_VERSION: ghidra_9.2.2_PUBLIC
     steps:
     - uses: actions/checkout@v2
     #- uses: actions/checkout@v2
@@ -26,14 +26,14 @@ jobs:
       uses: actions/setup-java@v1
       with:
         java-version: 11
-    - name: Download Ghidra ${env.ghidra-version}
-      run: wget -q https://ghidra-sre.org/${env.ghidra-version}_20201229.zip
+    - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
+      run: wget -q https://ghidra-sre.org/${GHIDRA_VERSION}_20201229.zip
     - name: Unzip Ghidra
-      run: unzip ${env.ghidra-version}_20201229.zip
+      run: unzip ${GHIDRA_VERSION}_20201229.zip
     - name: Build and pack extension
-      run: GHIDRA_INSTALL_DIR=$(pwd)/${env.ghidra-version} ./gradlew
+      run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./gradlew
     - name: Install extension to Ghidra
-      run: unzip ./dist/ShannonLoader-*.zip -d ./${env.ghidra-version}/Ghidra/Extensions
+      run: unzip ./dist/ShannonLoader-*.zip -d ./${GHIDRA_VERSION}/Ghidra/Extensions
       
   #  - name: Test Ghidra Headless
    #   run: ./ghidra_9.2.2_PUBLIC/support/analyzeHeadless /tmp/ testproject -loader ShannonLoader -noanalysis -overwrite -import ./ShannonFirmware/G800FXXU1CQB3_G800FOJV1CQB2_G800FXXU1CQB2_HOME_modem.bin

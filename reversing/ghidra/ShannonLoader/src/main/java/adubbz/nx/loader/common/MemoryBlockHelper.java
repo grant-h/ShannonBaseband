@@ -79,6 +79,39 @@ public class MemoryBlockHelper
         }
     }
 
+    public boolean renameBlock(String name, long addressOffset)
+    {
+        AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
+        Address blockStart = addressSpace.getAddress(this.baseAddress + addressOffset);
+        Memory memory = this.program.getMemory();
+
+        try {
+          MemoryBlock block = memory.getBlock(blockStart);
+
+          if (block == null) {
+            Msg.error(this, String.format("No existing block found for address at %s", blockStart));
+            return false;
+          }
+
+          block.setName(name);
+        } catch (LockException e) {
+          Msg.error(this, String.format("Exception when trying to rename block at %s to %s", blockStart, name));
+          return false;
+        }
+
+        return true;
+    }
+
+    public boolean blockExists(long addressOffset)
+    {
+        AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
+        Address blockStart = addressSpace.getAddress(this.baseAddress + addressOffset);
+        Memory memory = this.program.getMemory();
+
+        MemoryBlock block = memory.getBlock(blockStart);
+        return block != null;
+    }
+
     public boolean addMergeSection(String name, long addressOffset, InputStream dataInput, long dataSize) throws AddressOverflowException, AddressOutOfBoundsException
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
@@ -91,7 +124,7 @@ public class MemoryBlockHelper
         // Adding a merge section may include adding bytes to more than one existing
         // block as different MPU permissions will exist
 
-        Msg.info(this, String.format("Creating merge block %s -> [%08x - %08x]",
+        Msg.info(this, String.format("%s: Creating merge block -> [%08x - %08x]",
               name, addressOffset, addressOffset+dataSize));
 
         int chunkNum = 0;
@@ -110,17 +143,18 @@ public class MemoryBlockHelper
           MemoryBlock currentBlock = memory.getBlock(writePtr);
 
           if (currentBlock == null) {
-            Msg.error(this, String.format("No existing MPU block found for address write at %s", writePtr));
+            Msg.error(this, String.format("%s: No existing MPU block found for address write at %s",
+                  name, writePtr));
             return false;
           }
 
           if (currentBlock.getStart().compareTo(writePtr) != 0) {
-            Msg.info(this, String.format("Split block @ %s", writePtr));
+            Msg.info(this, String.format("%s: Split block at %s", name, writePtr));
 
             try {
               memory.split(currentBlock, writePtr);
             } catch (NotFoundException | LockException | MemoryBlockException e) {
-              Msg.error(this, String.format("Creating merge block split %s failed", name));
+              Msg.error(this, String.format("%s: Creating merge block split failed", name));
               e.printStackTrace();
               return false;
             }
@@ -137,8 +171,8 @@ public class MemoryBlockHelper
 
             String blockName = String.format("%s_%d_%s",
                 name, chunkNum, memoryPermissions(currentBlock));
-            Msg.info(this, String.format("==> SetBytes %s [%s - %s] 0x%08x bytes @ %s",
-                  blockName, currentBlock.getStart(), currentBlock.getEnd(), amtToWrite, writePtr));
+            Msg.info(this, String.format("%s: Create sub-block %s [%s - %s] 0x%08x bytes @ %s",
+                  name, blockName, currentBlock.getStart(), currentBlock.getEnd(), amtToWrite, writePtr));
 
             memory.setBytes(writePtr, data, (int)dataPtr, (int)amtToWrite);
             currentBlock.setName(blockName);
@@ -147,9 +181,8 @@ public class MemoryBlockHelper
             dataPtr += amtToWrite;
             chunkNum++;
           } catch (NotFoundException | LockException | MemoryAccessException e) {
-            Msg.error(this, String.format("Creating merge block %s failed", name));
+            Msg.error(this, String.format("%s: Creating merge block failed", name));
             e.printStackTrace();
-            // TODO: raise error
             return false;
           }
         }

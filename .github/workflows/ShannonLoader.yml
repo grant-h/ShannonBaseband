@@ -13,10 +13,6 @@ jobs:
     defaults:
       run:
         working-directory: reversing/ghidra/ShannonLoader
-        
-    env:
-      GHIDRA_INSTALL_DIR: ./ghidra_9.2.2_PUBLIC
-
     steps:
     - uses: actions/checkout@v2
     #- uses: actions/checkout@v2
@@ -31,11 +27,8 @@ jobs:
       run: wget -q https://ghidra-sre.org/ghidra_9.2.2_PUBLIC_20201229.zip
     - name: Unzip Ghidra
       run: unzip ghidra_9.2.2_PUBLIC_20201229.zip
-    - name: Test directory
-      run: ls -la && pwd
-
     - name: Build extension
-      run: ./gradlew build
+      run: GHIDRA_INSTALL_DIR=$(pwd)/ghidra_9.2.2_PUBLIC ./gradlew build
       
     - name: Install extension to Ghidra
       run: unzip ./dist/ShannonLoader-*.zip -d ./ghidra_9.2.2_PUBLIC/Ghidra/Extensions

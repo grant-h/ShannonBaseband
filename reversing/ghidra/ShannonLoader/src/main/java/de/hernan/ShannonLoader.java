@@ -322,6 +322,7 @@ public class ShannonLoader extends BinaryLoader
 
         if (!socFields.find()) {
           Msg.warn(this, "Unable to find version string in MAIN section");
+          return;
         }
 
         String soc = socFields.group("SOC");

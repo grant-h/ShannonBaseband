@@ -112,6 +112,36 @@ public class MemoryBlockHelper
         return block != null;
     }
 
+    public boolean initializeRange(long addressOffset, long size)
+    {
+        AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
+        Memory memory = this.program.getMemory();
+
+        int offset = 0;
+        MemoryBlock block = memory.getBlock(addressSpace.getAddress(this.baseAddress + addressOffset + offset));
+
+        if (block == null)
+          return false;
+
+        while (block != null && offset < size) {
+          try {
+            // XXX: maybe we don't want to initialize the entire block...should we split it?
+            if (!block.isInitialized()) {
+              memory.convertToInitialized(block, (byte)0);
+              Msg.info(this, String.format("Zero Initializing [%s - %s]", block.getStart(), block.getEnd()));
+            }
+          } catch (LockException | MemoryBlockException | NotFoundException e) {
+            Msg.error(this, String.format("Failed to initialize block @ %s", block.getStart()));
+            return false;
+          }
+
+          offset += block.getSize();
+          block = memory.getBlock(addressSpace.getAddress(this.baseAddress + addressOffset + offset));
+        }
+
+        return true;
+    }
+
     public boolean addMergeSection(String name, long addressOffset, InputStream dataInput, long dataSize) throws AddressOverflowException, AddressOutOfBoundsException
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
@@ -166,8 +196,11 @@ public class MemoryBlockHelper
           long amtToWrite = Math.min(currentBlock.getEnd().subtract(writePtr) + 1, dataSize-dataPtr);
 
           try {
-            if (!currentBlock.isInitialized())
+            if (!currentBlock.isInitialized()) {
               memory.convertToInitialized(currentBlock, (byte)0);
+              Msg.info(this, String.format("Zero Initializing [%s - %s]",
+                    currentBlock.getStart(), currentBlock.getEnd()));
+            }
 
             String blockName = String.format("%s_%d_%s",
                 name, chunkNum, memoryPermissions(currentBlock));

@@ -7,6 +7,7 @@ package de.hernan;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -33,6 +34,7 @@ import ghidra.app.util.opinion.LoaderTier;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.store.LockException;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressOverflowException;
 import ghidra.program.model.mem.MemoryAccessException;
@@ -44,6 +46,7 @@ import ghidra.program.model.lang.LanguageID;
 import ghidra.program.model.listing.*;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.database.module.TreeManager;
+import ghidra.program.flatapi.FlatProgramAPI;
 import ghidra.util.Msg;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
@@ -334,43 +337,97 @@ public class ShannonLoader extends BinaryLoader
             return false;
         }
 
-
-        if (relocationTableOffset != -1) {
-          if (!processRelocationTable(reader))
-            return false;
-
-          ShannonMemEntry main_tcm_entry = null;
-
-          Msg.info(this, String.format("==== Found %d relocation entries ====", memEntries.size()));
-
-          for (ShannonMemEntry entry : memEntries) {
-            Msg.info(this, String.format("%s", entry.toString()));
-
-            if (entry.getDestinationAddress() == MAIN_TCM_ADDRESS) {
-              main_tcm_entry = entry;
-              // don't break so can show all of the things we aren't currently handling
-              //break;
-            }
-          }
-
-          Msg.warn(this, "Only the TCM relocation entry is currently supported!");
-
-          // TODO: handle all memory addresses instead of just TCM
-          if (main_tcm_entry == null) {
-            Msg.warn(this, "Unable to find memory copy operations for TCM region");
-          } else {
-            if (!addMergeSection(provider, main_tcm_entry, "TCM"))
-              return false;
-          }
-        }
-
         if (!loadBasicTOCSections(provider, sec_boot, sec_main))
           return false;
+
+        doScatterload(program, finder, reader, provider);
 
         Msg.info(this, "==== Finalizing program trees ====");
 
         syncProgramTreeWithMemoryMap(program);
         organizeProgramTree(program);
+
+        return true;
+    }
+
+    private boolean doScatterload(Program program, PatternFinder finder, BinaryReader reader, ByteProvider provider)
+    {
+        if (relocationTableOffset != -1) {
+          if (!processRelocationTable(reader))
+            return false;
+        }
+
+        Msg.info(this, String.format("==== Found %d scatterload entries ====", memEntries.size()));
+
+        FlatProgramAPI fapi = new FlatProgramAPI(program);
+
+        Map<String, Long> scatterFunctions = new HashMap<>();
+        Map<Long, String> invScatterFunctions = new HashMap<>();
+
+        scatterFunctions.put("__scatterload_copy", -1L);
+        scatterFunctions.put("__scatterload_zeroinit", -1L);
+        scatterFunctions.put("__scatterload_decompress", -1L);
+        scatterFunctions.put("__scatterload_decompress2", -1L);
+
+        for (String fn : scatterFunctions.keySet()) {
+          int offset = finder.find_pat(fn);
+
+          if (offset != -1) {
+            long addr = offset+headerMap.get("MAIN").getLoadAddress();
+            Msg.info(this, String.format("Scatter: Found %s @ 0x%08x",
+                fn, addr));
+            scatterFunctions.put(fn, addr);
+            invScatterFunctions.put(addr, fn);
+          }
+        }
+
+        for (ShannonMemEntry entry : memEntries) {
+          if (!invScatterFunctions.containsKey(entry.getFunction())) {
+            Msg.warn(this, String.format("Scatter: unrecovered/recognized scatter op %s",
+                  entry));
+            continue;
+          }
+
+          String scatterOp = invScatterFunctions.get(entry.getFunction());
+
+          Msg.info(this, String.format("Scatter: applying %s(src=%08x, dst=%08x, size=%08x)",
+                scatterOp, entry.getSourceAddress(), entry.getDestinationAddress(), entry.getSize()));
+
+          AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
+          Address scatterSrc = addressSpace.getAddress(entry.getSourceAddress());
+          Address scatterDst = addressSpace.getAddress(entry.getDestinationAddress());
+
+          byte [] data = null;
+
+          try {
+            if (scatterOp == "__scatterload_zeroinit") {
+              data = new byte[(int)entry.getSize()];
+            } else if (scatterOp == "__scatterload_copy") {
+              data = fapi.getBytes(scatterSrc, (int)entry.getSize());
+            } else if (scatterOp == "__scatterload_decompress") {
+              data = ScatterDecompression.Decompress1(fapi, scatterSrc, (int)entry.getSize());
+            } else if (scatterOp == "__scatterload_decompress2") {
+              Msg.warn(this, "Scatter: not implemented " + scatterOp);
+              continue;
+              // TODO: decompress2
+              //data = ScatterDecompression.Decompress1(fapi, scatterSrc, (int)entry.getSize());
+            } else {
+              throw new RuntimeException("Unhandled scatterload op " + scatterOp);
+            }
+          } catch (MemoryAccessException e) {
+            Msg.error(this, String.format("Scatter: entry apply error %s", e));
+            break;
+          }
+
+          if (!memoryHelper.initializeRange(entry.getDestinationAddress(), entry.getSize()))
+            continue;
+
+          try {
+            fapi.setBytes(scatterDst, data);
+          } catch (MemoryAccessException e) {
+            Msg.error(this, String.format("Scatter: entry write error"), e);
+          }
+        }
 
         return true;
     }
@@ -383,6 +440,8 @@ public class ShannonLoader extends BinaryLoader
           if (!addMergeSection(provider, sec_boot, "BOOT_MIRROR", 0L))
             return false;
         }
+
+        // TODO: rename TCM region
 
         List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
         Collections.sort(headerList, (o1, o2) -> o1.getLoadAddress() - o2.getLoadAddress());
@@ -599,18 +658,6 @@ public class ShannonLoader extends BinaryLoader
         }
 
         relocationTableOffset = finder.find_pat("scatterload_table");
-
-        String [] scatterFunctions = { "__scatterload_copy", "__scatterload_zeroinit",
-          "__scatterload_decompress", "__scatterload_decompress2" };
-
-        for (String fn : scatterFunctions) {
-          int offset = finder.find_pat(fn);
-
-          if (offset != -1) {
-            Msg.info(this, String.format("Found %s 0x%08x",
-                fn, offset+fromSection.getLoadAddress()));
-          }
-        }
 
         if (relocationTableOffset == -1) {
           Msg.warn(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");

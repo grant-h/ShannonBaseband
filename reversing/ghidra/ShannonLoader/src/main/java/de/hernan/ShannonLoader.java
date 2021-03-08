@@ -10,6 +10,8 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Map;
+import static java.util.Map.entry;
 import java.util.Collection;
 import java.util.Scanner;
 import java.util.Comparator;
@@ -18,6 +20,7 @@ import java.util.List;
 import adubbz.nx.loader.common.MemoryBlockHelper;
 import de.hernan.TOCSectionHeader;
 import de.hernan.util.PatternFinder;
+import de.hernan.util.PatternEntry;
 import de.hernan.util.ByteCharSequence;
 
 import ghidra.app.util.Option;
@@ -59,6 +62,80 @@ public class ShannonLoader extends BinaryLoader
 
     private int mpuTableOffset = -1;
     private int relocationTableOffset = -1;
+
+    Map<String, List<PatternEntry>> patternDB = Map.ofEntries(
+        entry("soc_version",
+          List.of(
+            new PatternEntry(String.join("\n",
+                    "(?<SOC>[S][0-9]{3,4}(AP)?) # SOC-ID",
+                    ".{0,10}                    # garbage or unknown (usually underscores)",
+                    "(?<date>[0-9]{8})          # Date as YYYYMMDD (for rough SoC revision)",
+                    "[^\\x00]*                  # null terminator"))
+          )
+        ),
+        entry("shannon_version",
+          List.of(
+            new PatternEntry(String.join("\n",
+                     "ShannonOS  # Prefix of OS version",
+                     ".*?[\\x00] # Match until end of string"))
+          )
+        ),
+
+        /* This pattern needs explaining. An MPU entry is a table that Shannon
+         * will process to populate the MPU table of the Cortex-R series CPU.
+         * Each entry is 40 bytes (10 words little-endian) with this layout (each field is 4 bytes):
+         *
+         * [slot][base][size][access_control]{6}[enable]
+         *
+         * Slot - the architectual MPU slot number
+         * Base - the base address the MPU entry should apply to
+         * Size - a size code that indicates the memory range an entry should cover
+         * Access Control - a series of 6 words that are OR'd together to form the MPU permissions
+         * Enable - whether this MPU entry is enabled (usually 1)
+         *
+         * SO...now about this pattern. Well this pattern is matching the first MPU entry.
+         * See the comments inline.
+         */
+
+        entry("mpu_table",
+          List.of(
+            new PatternEntry(String.join("\n",
+              "[\\x00]{8} # matches a slot ID of 0 and base address of 0x00000000",
+              "\\x1c\\x00\\x00\\x00 # matches a size code 0x8000 bytes",
+              "(....){6} # matches 6 arbitrary 4-byte values",
+              "\\x01\\x00\\x00\\x00 # matches an enable of 1",
+              "\\x01\\x00\\x00\\x00 # matches the next entry slot ID of 1",
+              "\\x00\\x00\\x00\\x04 # matches address 0x04000000 which is the Cortex-R Tightly Coupled Memory (TCM) region",
+              "\\x20 # matches the size code of 0x20000"
+              )
+            )
+          )
+        ),
+
+        /* This pattern ALSO needs explaining :)
+         * It matches an entry in the boot time relocation table.
+         *
+         * These relocation entries are 16 bytes (4 words) of (src, dst, size, function).
+         * Function is a pointer to memcpy, memset, or lz4_decode and they are called
+         * with the first three fields as r0, r1, and r2 (first three args).
+         * These relocations are used to load parts of the MAIN image to special memory regions
+         * at boot and to decompress other resources into memory.
+         *
+         * This pattern matches midway (4 bytes) through a particularly stable entry (by inspection).
+         * I suspect this is configuration data of some kind that is copied, but not sure beyond that.
+         */
+
+        entry("scatterload_table",
+          List.of(
+            // Cortex-R with TCM (pre-5G)
+            // The negative offset of -4 realigns the table match address to start at the 'src' field
+            new PatternEntry(String.join("\n",
+              "\\x00\\x00\\x80\\x04 # the destination address of 0x04800000, which is right after the TCM region",
+              "\\x20\\x0c\\x00\\x00 # the operation size (0xc20)"), -0x4),
+            new PatternEntry("\\x00\\x00\\x50\\x47\\x00\\x00\\x00\\x04 # Cortex-A (5G)", -0x4)
+          )
+        )
+    );
 
     @Override
     public Collection<LoadSpec> findSupportedLoadSpecs(ByteProvider provider) throws IOException 
@@ -151,7 +228,9 @@ public class ShannonLoader extends BinaryLoader
           return false;
         }
 
-        PatternFinder finder = new PatternFinder(provider.getInputStream(sec_main.getOffset()), sec_main.getSize());
+        PatternFinder finder = new PatternFinder(
+            provider.getInputStream(sec_main.getOffset()), sec_main.getSize(),
+            patternDB);
 
         // purely informational for now
         discoverSocVersion(finder);
@@ -189,12 +268,11 @@ public class ShannonLoader extends BinaryLoader
 
           // TODO: handle all memory addresses instead of just TCM
           if (main_tcm_entry == null) {
-            Msg.error(this, "Unable to find memory copy operations for TCM region");
-            return false;
+            Msg.warn(this, "Unable to find memory copy operations for TCM region");
+          } else {
+            if (!addMergeSection(provider, main_tcm_entry, "TCM"))
+              return false;
           }
-
-          if (!addMergeSection(provider, main_tcm_entry, "TCM"))
-            return false;
         }
 
         if (!loadBasicTOCSections(provider, sec_boot, sec_main))
@@ -345,12 +423,9 @@ public class ShannonLoader extends BinaryLoader
     private void discoverSocVersion(PatternFinder finder)
     {
         java.util.regex.Matcher socFields =
-        finder.match("(?<SOC>[S][0-9]{3,4}(AP)?) # SOC-ID\n" +
-                    ".{0,10}                   # garbage or unknown (usually underscores)\n" +
-                    "(?<date>[0-9]{8})         # Date as YYYYMMDD (for rough SoC revision)\n" +
-                    "[^\\x00]*                 # null terminator");
+        finder.match("soc_version");
 
-        if (!socFields.find()) {
+        if (socFields == null) {
           Msg.warn(this, "Unable to find version string in MAIN section");
           return;
         } else {
@@ -361,10 +436,9 @@ public class ShannonLoader extends BinaryLoader
         }
 
         java.util.regex.Matcher osVersion =
-        finder.match("ShannonOS  # Prefix of OS version\n" +
-                     ".*?[\\x00] # Match until end of string\n");
+        finder.match("shannon_version");
 
-        if (!osVersion.find()) {
+        if (osVersion == null) {
           Msg.warn(this, "Unable to find OS version string in MAIN section");
           return;
         } else {
@@ -422,33 +496,11 @@ public class ShannonLoader extends BinaryLoader
 
     }
 
+
     // TODO: add label and types to tables
     private void findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
     {
-        /* This pattern needs explaining. An MPU entry is a table that Shannon
-         * will process to populate the MPU table of the Cortex-R series CPU.
-         * Each entry is 40 bytes (10 words little-endian) with this layout (each field is 4 bytes):
-         *
-         * [slot][base][size][access_control]{6}[enable]
-         *
-         * Slot - the architectual MPU slot number
-         * Base - the base address the MPU entry should apply to
-         * Size - a size code that indicates the memory range an entry should cover
-         * Access Control - a series of 6 words that are OR'd together to form the MPU permissions
-         * Enable - whether this MPU entry is enabled (usually 1)
-         *
-         * SO...now about this pattern. Well this pattern is matching the first MPU entry:
-         *
-         * [\x00]{8} - matches a slot ID of 0 and base address of 0x00000000
-         * \x1c\x00\x00\x00 - matches a size code 0x8000 bytes
-         * (....){6} - matches 6 arbitrary 4-byte values
-         * \x01\x00\x00\x00 - matches an enable of 1
-         * \x01\x00\x00\x00 - matches the next entry slot ID of 1
-         * \x00\x00\x00\x04 - matches address 0x04000000 which is the Cortex-R Tightly Coupled Memory (TCM) region
-         * \x20 - matches the size code of 0x20000 
-         */
-
-        mpuTableOffset = finder.find("[\\x00]{8}\\x1c\\x00\\x00\\x00(....){6}\\x01\\x00\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x04\\x20");
+        mpuTableOffset = finder.find("mpu_table");
 
         if (mpuTableOffset == -1) {
           Msg.warn(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
@@ -457,25 +509,7 @@ public class ShannonLoader extends BinaryLoader
                 mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
         }
 
-        /* This pattern ALSO needs explaining :)
-         * It matches an entry in the boot time relocation table.
-         *
-         * These relocation entries are 16 bytes (4 words) of (src, dst, size, function).
-         * Function is a pointer to memcpy, memset, or lz4_decode and they are called
-         * with the first three fields as r0, r1, and r2 (first three args).
-         * These relocations are used to load parts of the MAIN image to special memory regions
-         * at boot and to decompress other resources into memory.
-         *
-         * This pattern matches midway (4 bytes) through a particularly stable entry (by inspection).
-         * I suspect this is configuration data of some kind that is copied, but not sure beyond that.
-         *
-         * \x00\x00\x80\x04 - the destination address of 0x04800000, which is right after the TCM region
-         * \x20\x0c\x00\x00 - the operation size (0xc20)
-         *
-         * The negative offset of -4 realigns the table match address to start at the 'src' field.
-         */
-
-        relocationTableOffset = finder.find("\\x00\\x00\\x80\\x04\\x20\\x0c\\x00\\x00", -0x4);
+        relocationTableOffset = finder.find("scatterload_table");
 
         if (relocationTableOffset == -1) {
           Msg.warn(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");

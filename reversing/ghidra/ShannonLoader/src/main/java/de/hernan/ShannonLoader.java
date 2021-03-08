@@ -353,12 +353,23 @@ public class ShannonLoader extends BinaryLoader
         if (!socFields.find()) {
           Msg.warn(this, "Unable to find version string in MAIN section");
           return;
+        } else {
+          String soc = socFields.group("SOC");
+          String socDate = socFields.group("date");
+
+          Msg.info(this, String.format("Extracted SoC information: SOC %s, revision %s", soc, socDate));
         }
 
-        String soc = socFields.group("SOC");
-        String socDate = socFields.group("date");
+        java.util.regex.Matcher osVersion =
+        finder.match("ShannonOS  # Prefix of OS version\n" +
+                     ".*?[\\x00] # Match until end of string\n");
 
-        Msg.info(this, String.format("Extracted SoC information: SOC %s, revision %s", soc, socDate));
+        if (!osVersion.find()) {
+          Msg.warn(this, "Unable to find OS version string in MAIN section");
+          return;
+        } else {
+          Msg.info(this, String.format("Extracted OS version: %s", osVersion.group()));
+        }
     }
 
     private boolean processTOCHeader(BinaryReader reader)

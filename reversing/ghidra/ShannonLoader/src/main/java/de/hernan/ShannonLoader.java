@@ -134,6 +134,95 @@ public class ShannonLoader extends BinaryLoader
               "\\x20\\x0c\\x00\\x00 # the operation size (0xc20)"), -0x4),
             new PatternEntry("\\x00\\x00\\x50\\x47\\x00\\x00\\x00\\x04 # Cortex-A (5G)", -0x4)
           )
+        ),
+
+        // https://github.com/SysSec-KAIST/BaseSpec/blob/e027413148ce79f53bfdabb3bd5e6c2ffb291dcc/basespec/scatterload.py#L172
+        // Hippity-hoppity your patterns are now my property~
+        // Reference: https://developer.arm.com/documentation/dui0474/f/using-scatter-files?lang=en
+        entry("__scatterload_copy",
+          List.of(
+            // ARM version of scatterload. Found on old versions of modem and newer
+            // Seems to be up to the linker and the context during which they are called
+            new PatternEntry(String.join("\n",
+              "\\x10\\x20\\x52\\xe2 # subs      r2,r2,#0x10",
+              "\\x78\\x00\\xb0\\x28 # ldmiacs   r0!,{r3 r4 r5 r6}=>DAT_01245cc4"
+              )
+            ),
+            // Thumb-2 version of scatterload. Found on 2015-2019 versions of modem
+            new PatternEntry(String.join("\n",
+              "\\x10\\x3a # sub       sz,#0x10",
+              "\\x24\\xbf # itt       cs",
+              "\\x78\\xc8 # ldmia.cs  src!,{ r3, r4, r5, r6 }",
+              "\\x78\\xc1 # stmia.cs  dst!,{ r3, r4, r5, r6 }",
+              "\\xfa\\xd8 # bhi       BOOT_MEMCPY",
+              "\\x52\\x07 # lsl       sz,sz,#0x1d"
+              )
+            )
+          )
+        ),
+
+        entry("__scatterload_zeroinit",
+          List.of(
+            // ARM version of scatterload. Found on old versions of modem and newer
+            // Seems to be up to the linker and the context during which they are called
+            new PatternEntry(String.join("\n",
+              "\\x00\\x30\\xb0\\xe3 # movs      r3,#0x0",
+              "\\x00\\x40\\xb0\\xe3 # movs      r4,#0x0",
+              "\\x00\\x50\\xb0\\xe3 # movs      r5,#0x0",
+              "\\x00\\x60\\xb0\\xe3 # movs      r6,#0x0"
+              )
+            ),
+            // Thumb-2 version of scatterload. Found on 2015-2019 versions of modem
+            new PatternEntry(String.join("\n",
+              "\\x00\\x23 # mov       r3,#0x0",
+              "\\x00\\x24 # mov       r4,#0x0",
+              "\\x00\\x25 # mov       r5,#0x0",
+              "\\x00\\x26 # mov       r6,#0x0",
+              "\\x10\\x3a # sub       sz,#0x10",
+              "\\x28\\xbf # it        cs",
+              "\\x78\\xc1 # stmia.cs  dst!,{ r3, r4, r5, r6 }",
+              "\\xfb\\xd8 # bhi       LAB_415da584"
+              )
+            )
+          )
+        ),
+        // How the ARM RVCT linker (armlink) chooses which scatter compressor to use
+        // https://developer.arm.com/documentation/dui0474/f/using-linker-optimizations/overriding-the-compression-algorithm-used-by-the-linker?lang=en
+        // These are using LZ77 compression or mixing it with Run Length Encoding (RLE)
+        entry("__scatterload_decompress",
+          List.of(
+            // ARM version of scatterload. Found on old versions of modem and newer
+            // Seems to be up to the linker and the context during which they are called
+            new PatternEntry(String.join("\n",
+              "\\x02\\x20\\x81\\xe0 # add       r2,r1,r2",
+              "\\x00\\xc0\\xa0\\xe3 # mov       r12,#0x0",
+              "\\x01\\x30\\xd0\\xe4 # ldrb      r3,[r0],#0x1"
+              )
+            ),
+            // Still looking for a version of this
+            new PatternEntry(String.join("\n",
+              "\\x0a\\x44\\x10\\xf8\\x01\\x4b\\x14\\xf0\\x0f\\x05\\x08\\xbf\\x10\\xf8\\x01\\x5b"
+              )
+            ),
+            new PatternEntry(String.join("\n",
+              "\\x0a\\x44           # add       endptr,dst",
+              "\\x4f\\xf0\\x00\\x0c # mov.w     r12,#0x0",
+              "\\x10\\xf8\\x01\\x3b # ldrb.w    r3,src],#0x1",
+              "\\x13\\xf0\\x07\\x04 # ands      match_len,r3,#0x7",
+              "\\x08\\xbf           # it        eq"
+              )
+            )
+          )
+        ),
+
+        entry("__scatterload_decompress2",
+          List.of(
+            // Still looking for a version of this
+            new PatternEntry(String.join("\n",
+              "\\x10\\xf8\\x01\\x3b\\x0a\\x44\\x13\\xf0\\x03\\x04\\x08\\xbf\\x10\\xf8\\x01\\x4b"
+              )
+            )
+          )
         )
     );
 
@@ -423,7 +512,7 @@ public class ShannonLoader extends BinaryLoader
     private void discoverSocVersion(PatternFinder finder)
     {
         java.util.regex.Matcher socFields =
-        finder.match("soc_version");
+        finder.match_pat("soc_version");
 
         if (socFields == null) {
           Msg.warn(this, "Unable to find version string in MAIN section");
@@ -436,7 +525,7 @@ public class ShannonLoader extends BinaryLoader
         }
 
         java.util.regex.Matcher osVersion =
-        finder.match("shannon_version");
+        finder.match_pat("shannon_version");
 
         if (osVersion == null) {
           Msg.warn(this, "Unable to find OS version string in MAIN section");
@@ -500,7 +589,7 @@ public class ShannonLoader extends BinaryLoader
     // TODO: add label and types to tables
     private void findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
     {
-        mpuTableOffset = finder.find("mpu_table");
+        mpuTableOffset = finder.find_pat("mpu_table");
 
         if (mpuTableOffset == -1) {
           Msg.warn(this, "Unable to find Shannon MPU table pattern. MPU recovery is essential for correct section permissions which will improve analysis determining what is code and what is data.");
@@ -509,7 +598,19 @@ public class ShannonLoader extends BinaryLoader
                 mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
         }
 
-        relocationTableOffset = finder.find("scatterload_table");
+        relocationTableOffset = finder.find_pat("scatterload_table");
+
+        String [] scatterFunctions = { "__scatterload_copy", "__scatterload_zeroinit",
+          "__scatterload_decompress", "__scatterload_decompress2" };
+
+        for (String fn : scatterFunctions) {
+          int offset = finder.find_pat(fn);
+
+          if (offset != -1) {
+            Msg.info(this, String.format("Found %s 0x%08x",
+                fn, offset+fromSection.getLoadAddress()));
+          }
+        }
 
         if (relocationTableOffset == -1) {
           Msg.warn(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");

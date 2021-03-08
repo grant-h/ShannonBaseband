@@ -19,7 +19,7 @@ public class PatternFinder {
     this.patternDB = patternDB;
   }
 
-  public int find(String patternName) {
+  public int find_pat(String patternName) {
     for (PatternEntry pat : patternDB.get(patternName)) {
       Matcher m = matchInternal(pat.pattern);
 
@@ -30,7 +30,29 @@ public class PatternFinder {
     return -1;
   }
 
-  public Matcher match(String patternName) {
+  public int find(String pattern, int offset) {
+    Matcher m = matchInternal(pattern);
+
+    if (m.find())
+        return m.start() + offset;
+
+    return -1;
+  }
+
+  public int find(String pattern) {
+    return find(pattern, 0);
+  }
+
+  public Matcher match(String pattern) {
+    Matcher m = matchInternal(pattern);
+
+    if (!m.find())
+      return null;
+
+    return m;
+  }
+
+  public Matcher match_pat(String patternName) {
     Matcher m = null;
 
     for (PatternEntry pat : patternDB.get(patternName)) {

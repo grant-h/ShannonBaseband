@@ -370,7 +370,7 @@ public class ShannonLoader extends BinaryLoader
         scatterFunctions.put("__scatterload_decompress2", -1L);
 
         for (String fn : scatterFunctions.keySet()) {
-          int offset = finder.find_pat(fn);
+          int offset = finder.find_pat_earliest(fn);
 
           if (offset != -1) {
             long addr = offset+headerMap.get("MAIN").getLoadAddress();

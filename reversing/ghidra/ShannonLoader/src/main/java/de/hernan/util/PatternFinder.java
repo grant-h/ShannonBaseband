@@ -30,6 +30,31 @@ public class PatternFinder {
     return -1;
   }
 
+  public int find_pat_earliest(String patternName) {
+    long earliestOffset = 0xffffffffL;
+    Matcher earliest = null;
+
+    for (PatternEntry pat : patternDB.get(patternName)) {
+      Matcher m = matchInternal(pat.pattern);
+
+      if (m.find()) {
+        int foundAddr = m.start() + pat.offset;
+        System.out.println(String.format("%s: %s\nADDR: %08x",
+              patternName, pat.pattern, foundAddr));
+
+        if (foundAddr < earliestOffset) {
+          earliest = m;
+          earliestOffset = foundAddr;
+        }
+      }
+    }
+
+    if (earliest != null)
+      return (int)earliestOffset;
+
+    return -1;
+  }
+
   public int find(String pattern, int offset) {
     Matcher m = matchInternal(pattern);
 

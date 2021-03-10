@@ -12,6 +12,22 @@ public class PatternFinder {
   private byte [] content;
   private Map<String, List<PatternEntry>> patternDB;
 
+  public class FindInfo {
+    public final PatternEntry pattern;
+    public final int offset;
+
+    public FindInfo(PatternEntry pattern, int offset)
+    {
+      this.pattern = pattern;
+      this.offset = offset;
+    }
+
+    public boolean found()
+    {
+      return offset != -1;
+    }
+  }
+
   public PatternFinder(InputStream input, int amount, Map<String, List<PatternEntry>> patternDB) throws IOException {
     this.content = new byte[amount];
     input.read(this.content, 0, amount);
@@ -30,29 +46,31 @@ public class PatternFinder {
     return -1;
   }
 
-  public int find_pat_earliest(String patternName) {
+  public FindInfo find_pat_earliest(String patternName) {
     long earliestOffset = 0xffffffffL;
     Matcher earliest = null;
+    PatternEntry earliestPat = null;
 
     for (PatternEntry pat : patternDB.get(patternName)) {
       Matcher m = matchInternal(pat.pattern);
 
       if (m.find()) {
         int foundAddr = m.start() + pat.offset;
-        System.out.println(String.format("%s: %s\nADDR: %08x",
-              patternName, pat.pattern, foundAddr));
+        /*System.out.println(String.format("%s: %s\nADDR: %08x",
+              patternName, pat.pattern, foundAddr));*/
 
         if (foundAddr < earliestOffset) {
           earliest = m;
+          earliestPat = pat;
           earliestOffset = foundAddr;
         }
       }
     }
 
     if (earliest != null)
-      return (int)earliestOffset;
+      return new FindInfo(earliestPat, (int)earliestOffset);
 
-    return -1;
+    return new FindInfo(null, -1);
   }
 
   public int find(String pattern, int offset) {

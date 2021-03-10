@@ -24,6 +24,7 @@ import de.hernan.util.PatternFinder;
 import de.hernan.util.PatternEntry;
 import de.hernan.util.ByteCharSequence;
 
+import ghidra.app.cmd.disassemble.ArmDisassembleCommand;
 import ghidra.app.util.Option;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.ByteProvider;
@@ -43,7 +44,11 @@ import ghidra.program.model.lang.CompilerSpecID;
 import ghidra.program.model.lang.Language;
 import ghidra.program.model.lang.LanguageCompilerSpecPair;
 import ghidra.program.model.lang.LanguageID;
+import ghidra.program.model.scalar.Scalar;
+import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.database.module.TreeManager;
 import ghidra.program.flatapi.FlatProgramAPI;
@@ -136,6 +141,21 @@ public class ShannonLoader extends BinaryLoader
               "\\x00\\x00\\x80\\x04 # the destination address of 0x04800000, which is right after the TCM region",
               "\\x20\\x0c\\x00\\x00 # the operation size (0xc20)"), -0x4),
             new PatternEntry("\\x00\\x00\\x50\\x47\\x00\\x00\\x00\\x04 # Cortex-A (5G)", -0x4)
+          )
+        ),
+
+        entry("__scatterload",
+          List.of(
+            // Thumb-2 for scatterload function
+            new PatternEntry(String.join("\n",
+              "\\x0A\\xA0\\x90\\xE8\\x00\\x0C\\x82\\x44"
+              ), PatternEntry.PatternType.CODE16
+            ),
+            // ARM for scatterload function
+            new PatternEntry(String.join("\n",
+              "\\x2C\\x00\\x8F\\xE2\\x00\\x0C\\x90\\xE8\\x00\\xA0\\x8A\\xE0\\x00\\xB0\\x8B\\xE0"
+              ), PatternEntry.PatternType.CODE32
+            )
           )
         ),
 
@@ -340,6 +360,9 @@ public class ShannonLoader extends BinaryLoader
         if (!loadBasicTOCSections(provider, sec_boot, sec_main))
           return false;
 
+        // TODO: apply recursively to unpack sub-scatterfiles.
+        //       will need to pattern search ghidra memory so need to use findBytes
+        // TODO: label scattered data for provenance
         doScatterload(program, finder, reader, provider);
 
         Msg.info(this, "==== Finalizing program trees ====");
@@ -352,14 +375,83 @@ public class ShannonLoader extends BinaryLoader
 
     private boolean doScatterload(Program program, PatternFinder finder, BinaryReader reader, ByteProvider provider)
     {
+        PatternFinder.FindInfo scatterloadFunction = finder.find_pat_earliest("__scatterload");
+
+        FlatProgramAPI fapi = new FlatProgramAPI(program);
+        if (scatterloadFunction.found())
+        {
+          AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
+          Address scatterFn = addressSpace.getAddress(scatterloadFunction.offset + headerMap.get("MAIN").getLoadAddress());
+
+          boolean thumbPattern = scatterloadFunction.pattern.type == PatternEntry.PatternType.CODE16;
+          Msg.info(this, String.format("Scatter: found scatter function %s (thumb=%s)",
+                scatterFn, thumbPattern));
+
+          ArmDisassembleCommand cmd = new ArmDisassembleCommand(scatterFn, null, thumbPattern);
+
+          if (!cmd.applyTo(program)) {
+            Msg.error(this, String.format("Scatter: failed to disassemble __scatterload function"));
+            return false;
+          }
+
+          // TODO: postfix function
+          Function func = fapi.createFunction(scatterFn, "__scatterload");
+
+          InstructionIterator insnIter = program.getListing().getInstructions(func.getBody(), true);
+
+          if (!insnIter.hasNext()) {
+            Msg.error(this, String.format("Scatter: failed to get first instruction of scatter function"));
+            return false;
+          }
+
+          Instruction insn = insnIter.next();
+          PcodeOp [] pcode = insn.getPcode();
+          // first instruction should be an ADR relative instruction
+          PcodeOp memoryRef = pcode[0];
+
+          if (memoryRef.getOpcode() == PcodeOp.COPY) {
+            Address tableBase = memoryRef.getInput(0).getAddress();
+            // convert address from Pcode out of constant space and into the listing address-space
+            tableBase = addressSpace.getAddress(tableBase.getOffset());
+            try {
+              Data ref1 = fapi.createDWord(tableBase);
+              Data ref2 = fapi.createDWord(tableBase.add(4));
+
+              // These bounds can be negative depending on the table location relative
+              // to the function (this is PC-relative)
+              long startOffset = ((Scalar)ref1.getValue()).getSignedValue();
+              long endOffset = ((Scalar)ref2.getValue()).getSignedValue();
+              long tableSize = endOffset - startOffset;
+
+              Address tableAddress = tableBase.add(startOffset);
+              Address tableEndAddress = tableBase.add(endOffset);
+
+              Msg.info(this, String.format("Scatter: recovered bounds [%s %s]",
+                    tableAddress, tableEndAddress));
+            } catch (Exception e) {
+              Msg.error(this, "Error", e);
+            }
+          }
+
+          // This would only work after auto-analysis
+          /*ReferenceManager refmgr = program.getReferenceManager();
+
+          Msg.info(this, func);
+          Msg.info(this, func.getBody());
+          for (Address from : refmgr.getReferenceSourceIterator(func.getBody(), true)) {
+            Msg.info(this, from);
+            for (Reference ref : refmgr.getReferencesFrom(from)) {
+              Msg.info(this, ref);
+            }
+          }*/
+        }
+
         if (relocationTableOffset != -1) {
           if (!processRelocationTable(reader))
             return false;
         }
 
         Msg.info(this, String.format("==== Found %d scatterload entries ====", memEntries.size()));
-
-        FlatProgramAPI fapi = new FlatProgramAPI(program);
 
         Map<String, Long> scatterFunctions = new HashMap<>();
         Map<Long, String> invScatterFunctions = new HashMap<>();
@@ -370,10 +462,10 @@ public class ShannonLoader extends BinaryLoader
         scatterFunctions.put("__scatterload_decompress2", -1L);
 
         for (String fn : scatterFunctions.keySet()) {
-          int offset = finder.find_pat_earliest(fn);
+          PatternFinder.FindInfo finfo = finder.find_pat_earliest(fn);
 
-          if (offset != -1) {
-            long addr = offset+headerMap.get("MAIN").getLoadAddress();
+          if (finfo.found()) {
+            long addr = finfo.offset+headerMap.get("MAIN").getLoadAddress();
             Msg.info(this, String.format("Scatter: Found %s @ 0x%08x",
                 fn, addr));
             scatterFunctions.put(fn, addr);
@@ -441,7 +533,7 @@ public class ShannonLoader extends BinaryLoader
             return false;
         }
 
-        // TODO: rename TCM region
+        // TODO: rename TCM region, if present
 
         List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
         Collections.sort(headerList, (o1, o2) -> o1.getLoadAddress() - o2.getLoadAddress());

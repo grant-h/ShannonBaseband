@@ -35,6 +35,11 @@ public class PatternFinder {
     this.patternDB = patternDB;
   }
 
+  public PatternFinder(byte [] content, Map<String, List<PatternEntry>> patternDB) {
+    this.content = content;
+    this.patternDB = patternDB;
+  }
+
   public int find_pat(String patternName) {
     for (PatternEntry pat : patternDB.get(patternName)) {
       Matcher m = matchInternal(pat.pattern);

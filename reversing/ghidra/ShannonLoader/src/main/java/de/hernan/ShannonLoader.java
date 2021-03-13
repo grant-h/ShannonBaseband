@@ -67,6 +67,8 @@ public class ShannonLoader extends BinaryLoader
     private HashMap<String, TOCSectionHeader> headerMap = new HashMap<>();
     private ArrayList<AddressItem> addrEntries = new ArrayList<>();
     private ArrayList<MPUEntry> mpuEntries = new ArrayList<>();
+    private FlatProgramAPI fapi = null;
+
 
     private int mpuTableOffset = -1;
 
@@ -119,8 +121,7 @@ public class ShannonLoader extends BinaryLoader
           )
         ),
 
-        /* This pattern needs some explaining.
-         * It matches the __scatterload function which is called at boot to process
+        /* This pattern matches the __scatterload function which is called at boot to process
          * run-time image unpacking and relocation.
          *
          * These relocation entries are 16 bytes (4 words) of (src, dst, size, function).
@@ -318,6 +319,7 @@ public class ShannonLoader extends BinaryLoader
     {
         BinaryReader reader = new BinaryReader(provider, true);
         memoryHelper = new MemoryBlockHelper(program, messageLog, 0L);
+        fapi = new FlatProgramAPI(program);
 
         if (!processTOCHeader(reader))
           return false;
@@ -350,10 +352,7 @@ public class ShannonLoader extends BinaryLoader
         if (!loadBasicTOCSections(provider, sec_boot, sec_main))
           return false;
 
-        // TODO: apply recursively to unpack sub-scatterfiles.
-        //       will need to pattern search ghidra memory so need to use findBytes
-        // TODO: label scattered data for provenance
-        if (!doScatterload(program, finder, reader, provider)) {
+        if (!doScatterload(program, finder, headerMap.get("MAIN").getLoadAddress())) {
           Msg.warn(this, "Unable to process scatterload table. This table is used to unpack the MAIN image during baseband boot (runtime relocations). We would like to unpack it at load time in order to capture important regions, like TCM. Without this significant portions of critical code and data may appear to be missing.");
         }
 
@@ -365,20 +364,18 @@ public class ShannonLoader extends BinaryLoader
         return true;
     }
 
-    private boolean doScatterload(Program program, PatternFinder finder, BinaryReader reader, ByteProvider provider)
+    private boolean doScatterload(Program program, PatternFinder finder, long findBase)
     {
         AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
         PatternFinder.FindInfo scatterloadFunction = finder.find_pat_earliest("__scatterload");
         ArrayList<ScatterloadEntry> scatterEntries = new ArrayList<>();
 
-        FlatProgramAPI fapi = new FlatProgramAPI(program);
-
         if (!scatterloadFunction.found()) {
-          Msg.warn(this, "Scatterload: pattern find returned no results");
+          //Msg.warn(this, "Scatter: pattern find returned no results");
           return false;
         }
 
-        Address scatterFn = addressSpace.getAddress(scatterloadFunction.offset + headerMap.get("MAIN").getLoadAddress());
+        Address scatterFn = addressSpace.getAddress(scatterloadFunction.offset + findBase);
 
         boolean thumbPattern = scatterloadFunction.pattern.type == PatternEntry.PatternType.CODE16;
         Msg.info(this, String.format("Scatter: found scatter function %s (thumb=%s)",
@@ -436,10 +433,11 @@ public class ShannonLoader extends BinaryLoader
           Msg.info(this, String.format("Scatter: recovered bounds [%s %s]. Reading table...",
                 tableAddress, tableEndAddress));
 
-          scatterEntries = readScatterTable(fapi, tableAddress, tableEndAddress);
+          scatterEntries = readScatterTable(tableAddress, tableEndAddress);
           Msg.info(this, String.format("==== Found %d scatterload entries ====", scatterEntries.size()));
         } catch (Exception e) {
-          Msg.error(this, "Error", e);
+          Msg.error(this, "Scatter: unknown error", e);
+          return false;
         }
 
         Map<String, Address> scatterFunctions = new HashMap<>();
@@ -454,7 +452,7 @@ public class ShannonLoader extends BinaryLoader
           PatternFinder.FindInfo finfo = finder.find_pat_earliest(fn);
 
           if (finfo.found()) {
-            Address addr = addressSpace.getAddress(finfo.offset+headerMap.get("MAIN").getLoadAddress());
+            Address addr = addressSpace.getAddress(finfo.offset+findBase);
             // TODO: disassemble or just label
             // TODO: prefix function
             fapi.createFunction(addr, fn);
@@ -508,8 +506,10 @@ public class ShannonLoader extends BinaryLoader
             }
           } catch (MemoryAccessException e) {
             Msg.error(this, String.format("Scatter: entry apply error %s", e));
-            break;
+            continue;
           }
+
+          boolean newDataCopied = scatterEntrySrcEnd.compareTo(Address.NO_ADDRESS) != 0;
 
           if (memoryHelper.blockExists(entry.dst)) {
             if (!memoryHelper.initializeRange(entry.dst, entry.size)) {
@@ -536,18 +536,29 @@ public class ShannonLoader extends BinaryLoader
             fapi.setPlateComment(entry.dst, "ShannonLoader: " + scatterComment);
             fapi.createLabel(entry.dst, "SCATTERED_FROM_" + entry.src, true);
 
-            if (scatterEntrySrcEnd.compareTo(Address.NO_ADDRESS) != 0) {
+            if (newDataCopied) {
               fapi.setPlateComment(entry.src, "ShannonLoader: " + scatterComment);
               fapi.createLabel(entry.src, "SCATTER_TO_" + entry.dst, true);
 
               ArrayDataType adty = new ArrayDataType(new ByteDataType(),
                   (int)(long)scatterEntrySrcEnd.subtract(entry.src), 1);
 
-              // Create the array of scatter entries
+              // Create the array of bytes to prevent autoanalysis from getting greedy
               Data array = fapi.createData(entry.src, adty);
             }
           } catch (Exception e) {
             Msg.warn(this, "Scatter: failed to label scatter operation");
+          }
+
+          // process sub-scatter functions, if any
+          if (newDataCopied) {
+            PatternFinder finderSub = new PatternFinder(data, patternDB);
+            Msg.info(this, String.format("Scatter: sub-scatter search [%s - %s]",
+                  entry.dst, entry.dst.add(data.length)));
+
+            if (doScatterload(program, finderSub, entry.dst.getUnsignedOffset())) {
+              Msg.info(this, "Scatter: ============================= sub-scatter processed successfully");
+            }
           }
         }
 
@@ -589,11 +600,6 @@ public class ShannonLoader extends BinaryLoader
     {
         return addMergeSection(provider, section, section.getName(), section.getLoadAddress());
     }
-
-    /*private boolean addMergeSection(ByteProvider provider, ShannonMemEntry entry, String name)
-    {
-        return addMergeSection(provider, entry.getSourceFileOffset(), name, entry.getDestinationAddress(), entry.getSize());
-    }*/
 
     private boolean addMergeSection(ByteProvider provider, TOCSectionHeader section, String name, long loadAddress)
     {
@@ -893,7 +899,7 @@ public class ShannonLoader extends BinaryLoader
         return true;
     }
 
-    private ArrayList<ScatterloadEntry> readScatterTable(FlatProgramAPI fapi, Address start, Address end)
+    private ArrayList<ScatterloadEntry> readScatterTable(Address start, Address end)
     {
       ArrayList<ScatterloadEntry> entries = new ArrayList<>();
 

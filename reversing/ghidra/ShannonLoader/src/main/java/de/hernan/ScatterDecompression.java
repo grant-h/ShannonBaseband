@@ -5,7 +5,19 @@ import ghidra.program.flatapi.FlatProgramAPI;
 import ghidra.program.model.address.Address;
 
 class ScatterDecompression {
-  static public byte [] Decompress1(FlatProgramAPI fapi, Address start, int decompressedSize) throws MemoryAccessException
+
+  static public class DecompressionResult {
+    public final byte [] data;
+    public final Address inputEnd;
+
+    public DecompressionResult(byte [] data, Address inputEnd)
+    {
+      this.data = data;
+      this.inputEnd = inputEnd;
+    }
+  }
+
+  static public DecompressionResult Decompress1(FlatProgramAPI fapi, Address start, int decompressedSize) throws MemoryAccessException
   {
       byte [] emit = new byte[decompressedSize];
       int emitOff = 0;
@@ -55,6 +67,6 @@ class ScatterDecompression {
         }
       }
 
-      return emit;
+      return new DecompressionResult(emit, start.add(off));
   }
 }

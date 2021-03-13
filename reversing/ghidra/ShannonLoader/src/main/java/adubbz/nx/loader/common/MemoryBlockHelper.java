@@ -106,10 +106,13 @@ public class MemoryBlockHelper
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
         Address blockStart = addressSpace.getAddress(this.baseAddress + addressOffset);
-        Memory memory = this.program.getMemory();
 
-        MemoryBlock block = memory.getBlock(blockStart);
-        return block != null;
+        return blockExists(blockStart);
+    }
+
+    public boolean blockExists(Address blockStart)
+    {
+        return this.program.getMemory().getBlock(blockStart) != null;
     }
 
     public boolean initializeRange(long addressOffset, long size)

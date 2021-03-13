@@ -456,6 +456,7 @@ public class ShannonLoader extends BinaryLoader
           if (finfo.found()) {
             Address addr = addressSpace.getAddress(finfo.offset+headerMap.get("MAIN").getLoadAddress());
             // TODO: disassemble or just label
+            // TODO: prefix function
             fapi.createFunction(addr, fn);
             Msg.info(this, String.format("Scatter: Found %s @ %s",
                 fn, addr));
@@ -473,23 +474,35 @@ public class ShannonLoader extends BinaryLoader
 
           String scatterOp = invScatterFunctions.get(entry.function);
 
-          Msg.info(this, String.format("Scatter: applying %s(src=%s, dst=%s, size=%08x)",
-                scatterOp, entry.src, entry.dst, entry.size));
+          String scatterComment = String.format("%s(src=%s, dst=%s, size=%08x)",
+              scatterOp, entry.src, entry.dst, entry.size);
+          Msg.info(this, "Scatter: applying "+ scatterComment);
 
           byte [] data = null;
+          Address scatterEntrySrcEnd = Address.NO_ADDRESS;
 
           try {
             if (scatterOp == "__scatterload_zeroinit") {
               data = new byte[(int)entry.size];
+              // zeroinit src address is bogus, don't label src
             } else if (scatterOp == "__scatterload_copy") {
               data = fapi.getBytes(entry.src, (int)entry.size);
+              scatterEntrySrcEnd = entry.src.add(entry.size);
             } else if (scatterOp == "__scatterload_decompress") {
-              data = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
+              ScatterDecompression.DecompressionResult result = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
+              data = result.data;
+
+              // decompression input size is not known beforehand
+              scatterEntrySrcEnd = result.inputEnd;
             } else if (scatterOp == "__scatterload_decompress2") {
               Msg.warn(this, "Scatter: not implemented " + scatterOp);
               continue;
               // TODO: decompress2
               //data = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
+              //data = result.data;
+
+              // decompression input size is not known beforehand
+              //scatterEntrySrcEnd = result.inputEnd;
             } else {
               throw new RuntimeException("Unhandled scatterload op " + scatterOp);
             }
@@ -498,15 +511,43 @@ public class ShannonLoader extends BinaryLoader
             break;
           }
 
-          if (!memoryHelper.initializeRange(entry.dst, entry.size)) {
-            Msg.error(this, "Scatter: failed to initialize destination memory address");
-            continue;
+          if (memoryHelper.blockExists(entry.dst)) {
+            if (!memoryHelper.initializeRange(entry.dst, entry.size)) {
+              Msg.error(this, "Scatter: failed to initialize destination memory address");
+              continue;
+            }
+
+            try {
+              fapi.setBytes(entry.dst, data);
+            } catch (MemoryAccessException e) {
+              Msg.error(this, String.format("Scatter: entry write error"), e);
+              continue;
+            }
+          } else {
+            Msg.warn(this, "Scatter: no backing memory. Conservative memory recreation...");
+            if (!addMergeSection(new ByteArrayInputStream(data), "SL_"+entry.dst,
+                (long)entry.dst.getUnsignedOffset(), data.length)) {
+              Msg.error(this, "Scatter: unable to create memory block");
+              continue;
+            }
           }
 
           try {
-            fapi.setBytes(entry.dst, data);
-          } catch (MemoryAccessException e) {
-            Msg.error(this, String.format("Scatter: entry write error"), e);
+            fapi.setPlateComment(entry.dst, "ShannonLoader: " + scatterComment);
+            fapi.createLabel(entry.dst, "SCATTERED_FROM_" + entry.src, true);
+
+            if (scatterEntrySrcEnd.compareTo(Address.NO_ADDRESS) != 0) {
+              fapi.setPlateComment(entry.src, "ShannonLoader: " + scatterComment);
+              fapi.createLabel(entry.src, "SCATTER_TO_" + entry.dst, true);
+
+              ArrayDataType adty = new ArrayDataType(new ByteDataType(),
+                  (int)(long)scatterEntrySrcEnd.subtract(entry.src), 1);
+
+              // Create the array of scatter entries
+              Data array = fapi.createData(entry.src, adty);
+            }
+          } catch (Exception e) {
+            Msg.warn(this, "Scatter: failed to label scatter operation");
           }
         }
 
@@ -581,16 +622,25 @@ public class ShannonLoader extends BinaryLoader
         }
 
         try {
+          return addMergeSection(provider.getInputStream(offset), name, loadAddress, size);
+        } catch (IOException e) {
+          e.printStackTrace();
+          return false;
+        }
+    }
+
+    private boolean addMergeSection(InputStream stream, String name, long loadAddress, long size)
+    {
+        try {
           if (!memoryHelper.blockExists(loadAddress)) {
             Msg.warn(this, String.format("%s: No backing MPU entry. Falling back to RWX permissions",
                   name));
-            return memoryHelper.addInitializedBlock(name, loadAddress, provider.getInputStream(offset), size,
+            return memoryHelper.addInitializedBlock(name, loadAddress, stream, size,
                 true, true, true);
           } else {
-            return memoryHelper.addMergeSection(name, loadAddress,
-                provider.getInputStream(offset), size);
+            return memoryHelper.addMergeSection(name, loadAddress, stream, size);
           }
-        } catch (AddressOverflowException | AddressOutOfBoundsException | IOException e) {
+        } catch (AddressOverflowException | AddressOutOfBoundsException e) {
           e.printStackTrace();
           return false;
         }

@@ -34,6 +34,7 @@ import ghidra.app.util.opinion.LoadSpec;
 import ghidra.app.util.opinion.LoaderTier;
 import ghidra.framework.model.DomainFolder;
 import ghidra.framework.store.LockException;
+import ghidra.program.model.data.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.address.AddressOutOfBoundsException;
@@ -66,10 +67,8 @@ public class ShannonLoader extends BinaryLoader
     private HashMap<String, TOCSectionHeader> headerMap = new HashMap<>();
     private ArrayList<AddressItem> addrEntries = new ArrayList<>();
     private ArrayList<MPUEntry> mpuEntries = new ArrayList<>();
-    private ArrayList<ShannonMemEntry> memEntries = new ArrayList<>();
 
     private int mpuTableOffset = -1;
-    private int relocationTableOffset = -1;
 
     Map<String, List<PatternEntry>> patternDB = Map.ofEntries(
         entry("soc_version",
@@ -120,8 +119,9 @@ public class ShannonLoader extends BinaryLoader
           )
         ),
 
-        /* This pattern ALSO needs explaining :)
-         * It matches an entry in the boot time relocation table.
+        /* This pattern needs some explaining.
+         * It matches the __scatterload function which is called at boot to process
+         * run-time image unpacking and relocation.
          *
          * These relocation entries are 16 bytes (4 words) of (src, dst, size, function).
          * Function is a pointer to memcpy, memset, or lz4_decode and they are called
@@ -129,20 +129,12 @@ public class ShannonLoader extends BinaryLoader
          * These relocations are used to load parts of the MAIN image to special memory regions
          * at boot and to decompress other resources into memory.
          *
-         * This pattern matches midway (4 bytes) through a particularly stable entry (by inspection).
-         * I suspect this is configuration data of some kind that is copied, but not sure beyond that.
+         * This function is decompiled to find the table bounds and then the entries are processed.
+         *
+         * Hippity-hoppity your patterns are now my property~
+         * https://github.com/SysSec-KAIST/BaseSpec/blob/e027413148ce79f53bfdabb3bd5e6c2ffb291dcc/basespec/scatterload.py#L172
+         * Reference: https://developer.arm.com/documentation/dui0474/f/using-scatter-files?lang=en
          */
-
-        entry("scatterload_table",
-          List.of(
-            // Cortex-R with TCM (pre-5G)
-            // The negative offset of -4 realigns the table match address to start at the 'src' field
-            new PatternEntry(String.join("\n",
-              "\\x00\\x00\\x80\\x04 # the destination address of 0x04800000, which is right after the TCM region",
-              "\\x20\\x0c\\x00\\x00 # the operation size (0xc20)"), -0x4),
-            new PatternEntry("\\x00\\x00\\x50\\x47\\x00\\x00\\x00\\x04 # Cortex-A (5G)", -0x4)
-          )
-        ),
 
         entry("__scatterload",
           List.of(
@@ -159,9 +151,6 @@ public class ShannonLoader extends BinaryLoader
           )
         ),
 
-        // https://github.com/SysSec-KAIST/BaseSpec/blob/e027413148ce79f53bfdabb3bd5e6c2ffb291dcc/basespec/scatterload.py#L172
-        // Hippity-hoppity your patterns are now my property~
-        // Reference: https://developer.arm.com/documentation/dui0474/f/using-scatter-files?lang=en
         entry("__scatterload_copy",
           List.of(
             // ARM version of scatterload. Found on old versions of modem and newer
@@ -209,6 +198,7 @@ public class ShannonLoader extends BinaryLoader
             )
           )
         ),
+
         // How the ARM RVCT linker (armlink) chooses which scatter compressor to use
         // https://developer.arm.com/documentation/dui0474/f/using-linker-optimizations/overriding-the-compression-algorithm-used-by-the-linker?lang=en
         // These are using LZ77 compression or mixing it with Run Length Encoding (RLE)
@@ -363,7 +353,9 @@ public class ShannonLoader extends BinaryLoader
         // TODO: apply recursively to unpack sub-scatterfiles.
         //       will need to pattern search ghidra memory so need to use findBytes
         // TODO: label scattered data for provenance
-        doScatterload(program, finder, reader, provider);
+        if (!doScatterload(program, finder, reader, provider)) {
+          Msg.warn(this, "Unable to process scatterload table. This table is used to unpack the MAIN image during baseband boot (runtime relocations). We would like to unpack it at load time in order to capture important regions, like TCM. Without this significant portions of critical code and data may appear to be missing.");
+        }
 
         Msg.info(this, "==== Finalizing program trees ====");
 
@@ -375,134 +367,129 @@ public class ShannonLoader extends BinaryLoader
 
     private boolean doScatterload(Program program, PatternFinder finder, BinaryReader reader, ByteProvider provider)
     {
+        AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
         PatternFinder.FindInfo scatterloadFunction = finder.find_pat_earliest("__scatterload");
+        ArrayList<ScatterloadEntry> scatterEntries = new ArrayList<>();
 
         FlatProgramAPI fapi = new FlatProgramAPI(program);
-        if (scatterloadFunction.found())
-        {
-          AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
-          Address scatterFn = addressSpace.getAddress(scatterloadFunction.offset + headerMap.get("MAIN").getLoadAddress());
 
-          boolean thumbPattern = scatterloadFunction.pattern.type == PatternEntry.PatternType.CODE16;
-          Msg.info(this, String.format("Scatter: found scatter function %s (thumb=%s)",
-                scatterFn, thumbPattern));
-
-          ArmDisassembleCommand cmd = new ArmDisassembleCommand(scatterFn, null, thumbPattern);
-
-          if (!cmd.applyTo(program)) {
-            Msg.error(this, String.format("Scatter: failed to disassemble __scatterload function"));
-            return false;
-          }
-
-          // TODO: postfix function
-          Function func = fapi.createFunction(scatterFn, "__scatterload");
-
-          InstructionIterator insnIter = program.getListing().getInstructions(func.getBody(), true);
-
-          if (!insnIter.hasNext()) {
-            Msg.error(this, String.format("Scatter: failed to get first instruction of scatter function"));
-            return false;
-          }
-
-          Instruction insn = insnIter.next();
-          PcodeOp [] pcode = insn.getPcode();
-          // first instruction should be an ADR relative instruction
-          PcodeOp memoryRef = pcode[0];
-
-          if (memoryRef.getOpcode() == PcodeOp.COPY) {
-            Address tableBase = memoryRef.getInput(0).getAddress();
-            // convert address from Pcode out of constant space and into the listing address-space
-            tableBase = addressSpace.getAddress(tableBase.getOffset());
-            try {
-              Data ref1 = fapi.createDWord(tableBase);
-              Data ref2 = fapi.createDWord(tableBase.add(4));
-
-              // These bounds can be negative depending on the table location relative
-              // to the function (this is PC-relative)
-              long startOffset = ((Scalar)ref1.getValue()).getSignedValue();
-              long endOffset = ((Scalar)ref2.getValue()).getSignedValue();
-              long tableSize = endOffset - startOffset;
-
-              Address tableAddress = tableBase.add(startOffset);
-              Address tableEndAddress = tableBase.add(endOffset);
-
-              Msg.info(this, String.format("Scatter: recovered bounds [%s %s]",
-                    tableAddress, tableEndAddress));
-            } catch (Exception e) {
-              Msg.error(this, "Error", e);
-            }
-          }
-
-          // This would only work after auto-analysis
-          /*ReferenceManager refmgr = program.getReferenceManager();
-
-          Msg.info(this, func);
-          Msg.info(this, func.getBody());
-          for (Address from : refmgr.getReferenceSourceIterator(func.getBody(), true)) {
-            Msg.info(this, from);
-            for (Reference ref : refmgr.getReferencesFrom(from)) {
-              Msg.info(this, ref);
-            }
-          }*/
+        if (!scatterloadFunction.found()) {
+          Msg.warn(this, "Scatterload: pattern find returned no results");
+          return false;
         }
 
-        if (relocationTableOffset != -1) {
-          if (!processRelocationTable(reader))
-            return false;
+        Address scatterFn = addressSpace.getAddress(scatterloadFunction.offset + headerMap.get("MAIN").getLoadAddress());
+
+        boolean thumbPattern = scatterloadFunction.pattern.type == PatternEntry.PatternType.CODE16;
+        Msg.info(this, String.format("Scatter: found scatter function %s (thumb=%s)",
+              scatterFn, thumbPattern));
+
+        ArmDisassembleCommand cmd = new ArmDisassembleCommand(scatterFn, null, thumbPattern);
+
+        Msg.info(this, "Scatter: disassembling function...");
+        if (!cmd.applyTo(program)) {
+          Msg.error(this, String.format("Scatter: failed to disassemble __scatterload function"));
+          return false;
         }
 
-        Msg.info(this, String.format("==== Found %d scatterload entries ====", memEntries.size()));
+        Msg.info(this, "Scatter: inspecting instructions...");
 
-        Map<String, Long> scatterFunctions = new HashMap<>();
-        Map<Long, String> invScatterFunctions = new HashMap<>();
+        // TODO: postfix function
+        Function func = fapi.createFunction(scatterFn, "__scatterload");
 
-        scatterFunctions.put("__scatterload_copy", -1L);
-        scatterFunctions.put("__scatterload_zeroinit", -1L);
-        scatterFunctions.put("__scatterload_decompress", -1L);
-        scatterFunctions.put("__scatterload_decompress2", -1L);
+        InstructionIterator insnIter = program.getListing().getInstructions(func.getBody(), true);
+
+        if (!insnIter.hasNext()) {
+          Msg.error(this, "Scatter: failed to get first instruction of scatter function");
+          return false;
+        }
+
+        Instruction insn = insnIter.next();
+        PcodeOp [] pcode = insn.getPcode();
+        // first instruction should be an ADR relative instruction
+        PcodeOp memoryRef = pcode[0];
+
+        if (memoryRef.getOpcode() != PcodeOp.COPY) {
+          Msg.error(this, "Scatter: first Pcode instruction is not a data reference");
+          return false;
+        }
+
+        Address tableBase = memoryRef.getInput(0).getAddress();
+        // convert address from Pcode out of constant space and into the listing address-space
+        tableBase = addressSpace.getAddress(tableBase.getOffset());
+
+        Msg.info(this, "Scatter: extracting table bounds...");
+
+        try {
+          Data ref1 = fapi.createDWord(tableBase);
+          Data ref2 = fapi.createDWord(tableBase.add(4));
+
+          // These bounds can be negative depending on the table location relative
+          // to the function (this is PC-relative)
+          long startOffset = ((Scalar)ref1.getValue()).getSignedValue();
+          long endOffset = ((Scalar)ref2.getValue()).getSignedValue();
+          long tableSize = endOffset - startOffset;
+
+          Address tableAddress = tableBase.add(startOffset);
+          Address tableEndAddress = tableBase.add(endOffset);
+
+          Msg.info(this, String.format("Scatter: recovered bounds [%s %s]. Reading table...",
+                tableAddress, tableEndAddress));
+
+          scatterEntries = readScatterTable(fapi, tableAddress, tableEndAddress);
+          Msg.info(this, String.format("==== Found %d scatterload entries ====", scatterEntries.size()));
+        } catch (Exception e) {
+          Msg.error(this, "Error", e);
+        }
+
+        Map<String, Address> scatterFunctions = new HashMap<>();
+        Map<Address, String> invScatterFunctions = new HashMap<>();
+
+        scatterFunctions.put("__scatterload_copy", Address.NO_ADDRESS);
+        scatterFunctions.put("__scatterload_zeroinit", Address.NO_ADDRESS);
+        scatterFunctions.put("__scatterload_decompress", Address.NO_ADDRESS);
+        scatterFunctions.put("__scatterload_decompress2", Address.NO_ADDRESS);
 
         for (String fn : scatterFunctions.keySet()) {
           PatternFinder.FindInfo finfo = finder.find_pat_earliest(fn);
 
           if (finfo.found()) {
-            long addr = finfo.offset+headerMap.get("MAIN").getLoadAddress();
-            Msg.info(this, String.format("Scatter: Found %s @ 0x%08x",
+            Address addr = addressSpace.getAddress(finfo.offset+headerMap.get("MAIN").getLoadAddress());
+            // TODO: disassemble or just label
+            fapi.createFunction(addr, fn);
+            Msg.info(this, String.format("Scatter: Found %s @ %s",
                 fn, addr));
             scatterFunctions.put(fn, addr);
             invScatterFunctions.put(addr, fn);
           }
         }
 
-        for (ShannonMemEntry entry : memEntries) {
-          if (!invScatterFunctions.containsKey(entry.getFunction())) {
+        for (ScatterloadEntry entry : scatterEntries) {
+          if (!invScatterFunctions.containsKey(entry.function)) {
             Msg.warn(this, String.format("Scatter: unrecovered/recognized scatter op %s",
                   entry));
             continue;
           }
 
-          String scatterOp = invScatterFunctions.get(entry.getFunction());
+          String scatterOp = invScatterFunctions.get(entry.function);
 
-          Msg.info(this, String.format("Scatter: applying %s(src=%08x, dst=%08x, size=%08x)",
-                scatterOp, entry.getSourceAddress(), entry.getDestinationAddress(), entry.getSize()));
-
-          AddressSpace addressSpace = program.getAddressFactory().getDefaultAddressSpace();
-          Address scatterSrc = addressSpace.getAddress(entry.getSourceAddress());
-          Address scatterDst = addressSpace.getAddress(entry.getDestinationAddress());
+          Msg.info(this, String.format("Scatter: applying %s(src=%s, dst=%s, size=%08x)",
+                scatterOp, entry.src, entry.dst, entry.size));
 
           byte [] data = null;
 
           try {
             if (scatterOp == "__scatterload_zeroinit") {
-              data = new byte[(int)entry.getSize()];
+              data = new byte[(int)entry.size];
             } else if (scatterOp == "__scatterload_copy") {
-              data = fapi.getBytes(scatterSrc, (int)entry.getSize());
+              data = fapi.getBytes(entry.src, (int)entry.size);
             } else if (scatterOp == "__scatterload_decompress") {
-              data = ScatterDecompression.Decompress1(fapi, scatterSrc, (int)entry.getSize());
+              data = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
             } else if (scatterOp == "__scatterload_decompress2") {
               Msg.warn(this, "Scatter: not implemented " + scatterOp);
               continue;
               // TODO: decompress2
-              //data = ScatterDecompression.Decompress1(fapi, scatterSrc, (int)entry.getSize());
+              //data = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
             } else {
               throw new RuntimeException("Unhandled scatterload op " + scatterOp);
             }
@@ -511,11 +498,13 @@ public class ShannonLoader extends BinaryLoader
             break;
           }
 
-          if (!memoryHelper.initializeRange(entry.getDestinationAddress(), entry.getSize()))
+          if (!memoryHelper.initializeRange(entry.dst, entry.size)) {
+            Msg.error(this, "Scatter: failed to initialize destination memory address");
             continue;
+          }
 
           try {
-            fapi.setBytes(scatterDst, data);
+            fapi.setBytes(entry.dst, data);
           } catch (MemoryAccessException e) {
             Msg.error(this, String.format("Scatter: entry write error"), e);
           }
@@ -560,10 +549,10 @@ public class ShannonLoader extends BinaryLoader
         return addMergeSection(provider, section, section.getName(), section.getLoadAddress());
     }
 
-    private boolean addMergeSection(ByteProvider provider, ShannonMemEntry entry, String name)
+    /*private boolean addMergeSection(ByteProvider provider, ShannonMemEntry entry, String name)
     {
         return addMergeSection(provider, entry.getSourceFileOffset(), name, entry.getDestinationAddress(), entry.getSize());
-    }
+    }*/
 
     private boolean addMergeSection(ByteProvider provider, TOCSectionHeader section, String name, long loadAddress)
     {
@@ -748,15 +737,6 @@ public class ShannonLoader extends BinaryLoader
           Msg.info(this, String.format("MPU entry table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
                 mpuTableOffset, mpuTableOffset+fromSection.getLoadAddress()));
         }
-
-        relocationTableOffset = finder.find_pat("scatterload_table");
-
-        if (relocationTableOffset == -1) {
-          Msg.warn(this, "Unable to find boot-time relocation table pattern. This table is used to unpack the MAIN image during baseband boot, but we need to unpack it at load time in order to capture the TCM region. Without this significant portions of the most critical code will appear to be missing and all xrefs will be broken.");
-        } else {
-          Msg.info(this, String.format("Boot-time relocation table found in section=MAIN offset=0x%08x (physical address 0x%08x)",
-                relocationTableOffset, relocationTableOffset+fromSection.getLoadAddress()));
-        }
     }
 
     private boolean readMPUTable(BinaryReader reader)
@@ -863,60 +843,49 @@ public class ShannonLoader extends BinaryLoader
         return true;
     }
 
-    private boolean processRelocationTable(BinaryReader reader)
+    private ArrayList<ScatterloadEntry> readScatterTable(FlatProgramAPI fapi, Address start, Address end)
     {
-        TOCSectionHeader sec_main = headerMap.get("MAIN");
+      ArrayList<ScatterloadEntry> entries = new ArrayList<>();
 
-        // this can fall into the middle of the table
-        // so we need to scan backwards first
-        int table_address_base = sec_main.getOffset()+relocationTableOffset;
+      DataTypeManager dtm = fapi.getCurrentProgram().getDataTypeManager();
+      StructureDataType scatterEntryStruct = new StructureDataType("ScatterLoadEntry", 0);
 
-        ShannonMemEntry entry = null;
+      scatterEntryStruct.add(new PointerDataType(), -1, "src", "");
+      scatterEntryStruct.add(new PointerDataType(), -1, "dst", "");
+      scatterEntryStruct.add(new UnsignedIntegerDataType(), -1, "size", "");
+      scatterEntryStruct.add(new PointerDataType(), -1, "function", "");
 
-        while (true) {
-          try {
-            reader.setPointerIndex(table_address_base);
-            entry = new ShannonMemEntry(reader, sec_main);
-          } catch (IOException e) {
-              Msg.error(this, "Failed to read relocation table entry (backwards)");
-              return false;
-          }
+      DataType dat = dtm.addDataType(scatterEntryStruct, DataTypeConflictHandler.REPLACE_HANDLER);
 
-          // discard entries that
-          if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
-              entry.getFunction() > (sec_main.getLoadAddress()+sec_main.getSize()) ||
-              entry.getFunction() < sec_main.getLoadAddress()) {
-            // undo our stride
-            table_address_base += 0x10;
-            break;
-          }
+      long elements = (long)end.subtract(start) / dat.getLength();
+      ArrayDataType adty = new ArrayDataType(dat, (int)elements, dat.getLength());
 
-          table_address_base -= 0x10;
+      DataType adtyadd = dtm.addDataType(adty, DataTypeConflictHandler.REPLACE_HANDLER);
+
+      try {
+        // Create the array of scatter entries
+        Data array = fapi.createData(start, adtyadd);
+
+        // for each entry in the Data array
+        for (int i = 0; i < array.getNumComponents(); i++) {
+          Data entry = array.getComponent(i);
+          ScatterloadEntry slEntry = new ScatterloadEntry(
+              ((Address)entry.getComponent(0).getValue()),
+              ((Address)entry.getComponent(1).getValue()),
+              ((Address)entry.getComponent(3).getValue()),
+              ((Scalar)entry.getComponent(2).getValue()).getUnsignedValue());
+
+          entries.add(slEntry);
         }
 
-        reader.setPointerIndex(table_address_base);
+      } catch (Exception e) {
+        Msg.error(this, "Scatter: exception creating the scatter entry type", e);
 
-        // okay we presumably have the table base. scan forwards to collect the entries
-        while (true) {
-          try {
-            // will advance the reader
-            entry = new ShannonMemEntry(reader, sec_main);
-          } catch (IOException e) {
-              Msg.error(this, "Failed to read relocation table entry (forwards)");
-              return false;
-          }
+        // blank or partial list
+        return entries;
+      }
 
-          // discard entries that
-          if (entry.getSourceAddress() > (sec_main.getLoadAddress()+sec_main.getSize()) || entry.getSize() >= 0x10000000 ||
-              entry.getFunction() > (sec_main.getLoadAddress()+sec_main.getSize()) ||
-              entry.getFunction() < sec_main.getLoadAddress()) {
-            break;
-          }
-
-          memEntries.add(entry);
-        }
-
-        return true;
+      return entries;
     }
 
     @Override

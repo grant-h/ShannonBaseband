@@ -115,10 +115,16 @@ public class MemoryBlockHelper
     public boolean initializeRange(long addressOffset, long size)
     {
         AddressSpace addressSpace = this.program.getAddressFactory().getDefaultAddressSpace();
+        Address address = addressSpace.getAddress(addressOffset);
+        return initializeRange(address, size);
+    }
+
+    public boolean initializeRange(Address addressOffset, long size)
+    {
         Memory memory = this.program.getMemory();
 
         int offset = 0;
-        MemoryBlock block = memory.getBlock(addressSpace.getAddress(this.baseAddress + addressOffset + offset));
+        MemoryBlock block = memory.getBlock(addressOffset);
 
         if (block == null)
           return false;
@@ -136,7 +142,7 @@ public class MemoryBlockHelper
           }
 
           offset += block.getSize();
-          block = memory.getBlock(addressSpace.getAddress(this.baseAddress + addressOffset + offset));
+          block = memory.getBlock(addressOffset.add(offset));
         }
 
         return true;

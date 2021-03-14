@@ -85,8 +85,9 @@ public class ShannonLoader extends BinaryLoader
         entry("shannon_version",
           List.of(
             new PatternEntry(String.join("\n",
-                     "ShannonOS  # Prefix of OS version",
-                     ".*?[\\x00] # Match until end of string"))
+                     "(ShannonOS.*?)[\\x00] # Match until end of string"
+              )
+            )
           )
         ),
 
@@ -727,7 +728,7 @@ public class ShannonLoader extends BinaryLoader
           Msg.warn(this, "Unable to find OS version string in MAIN section");
           return;
         } else {
-          Msg.info(this, String.format("Extracted OS version: %s", osVersion.group()));
+          Msg.info(this, String.format("Extracted OS version: %s", osVersion.group(1)));
         }
     }
 

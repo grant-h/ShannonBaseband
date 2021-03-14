@@ -505,14 +505,11 @@ public class ShannonLoader extends BinaryLoader
               // decompression input size is not known beforehand
               scatterEntrySrcEnd = result.inputEnd;
             } else if (scatterOp == "__scatterload_decompress2") {
-              Msg.warn(this, "Scatter: not implemented " + scatterOp);
-              continue;
-              // TODO: decompress2
-              //data = ScatterDecompression.Decompress1(fapi, entry.src, (int)entry.size);
-              //data = result.data;
+              ScatterDecompression.DecompressionResult result = ScatterDecompression.Decompress2(fapi, entry.src, (int)entry.size);
+              data = result.data;
 
               // decompression input size is not known beforehand
-              //scatterEntrySrcEnd = result.inputEnd;
+              scatterEntrySrcEnd = result.inputEnd;
             } else {
               throw new RuntimeException("Unhandled scatterload op " + scatterOp);
             }

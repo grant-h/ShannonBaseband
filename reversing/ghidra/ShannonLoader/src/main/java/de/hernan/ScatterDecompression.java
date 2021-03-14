@@ -69,4 +69,60 @@ class ScatterDecompression {
 
       return new DecompressionResult(emit, start.add(off));
   }
+
+  static public DecompressionResult Decompress2(FlatProgramAPI fapi, Address start, int decompressedSize) throws MemoryAccessException
+  {
+      byte [] emit = new byte[decompressedSize];
+      int emitOff = 0;
+      int off = 0;
+
+      while (emitOff < decompressedSize) {
+        int token = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
+        int matchLen = token & 3;
+
+        if (matchLen == 0) {
+          matchLen = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
+        }
+
+        int litLen = (token >> 4) & 0xf;
+
+        if (litLen == 0) {
+          litLen = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
+        }
+
+        for (int i = 0; i < matchLen-1; i++) {
+          if (emitOff >= decompressedSize)
+            throw new MemoryAccessException("Decompression overflow");
+          emit[emitOff++] = fapi.getByte(start.add(off++));
+        }
+
+        if (litLen == 0)
+          continue;
+
+        int backref = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
+        int backrefOffset = emitOff - backref;
+
+        int backrefMult = token & 0xC;
+
+        if (backrefMult == 12) {
+          backrefMult = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
+          backrefOffset -= 0x100*backrefMult;
+        } else {
+          backrefOffset -= 0x40*backrefMult;
+        }
+
+        /*System.out.println(String.format("emitoff=%d backref=%d backrefOff=%d max=%d",
+              emitOff, backref, backrefOffset, decompressedSize));*/
+
+        for (int i = 0; i < litLen+2; i++) {
+          if (emitOff >= decompressedSize)
+            throw new MemoryAccessException("Decompression overflow");
+          if (backrefOffset < 0 || backrefOffset >= emitOff || backrefOffset >= decompressedSize)
+            throw new MemoryAccessException("Decompression backreference out-of-range");
+          emit[emitOff++] = emit[emitOff - backref];
+        }
+      }
+
+      return new DecompressionResult(emit, start.add(off));
+  }
 }

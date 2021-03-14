@@ -227,6 +227,16 @@ public class ShannonLoader extends BinaryLoader
               "\\x13\\xf0\\x07\\x04 # ands      match_len,r3,#0x7",
               "\\x08\\xbf           # it        eq"
               )
+            ),
+            new PatternEntry(String.join("\n",
+              "..\\x8f\\xe2         # adr r12, REF (starts in ARM)",
+              "\\x1c\\xff\\x2f\\xe1 # bx r12 (switch to thumb)",
+              "\\x8a\\x18 # add  r2,r1,r2 (REF)", 
+              "\\x03\\x78 # ldrb r3,[r0,#0x0]",
+              "\\x01\\x30 # add  r0,#0x1",
+              "\\x5c\\x07 # lsl  r4,r3,#0x1d",
+              "\\x64\\x0f # lsr  r4,r4,#0x1d"
+              )
             )
           )
         ),

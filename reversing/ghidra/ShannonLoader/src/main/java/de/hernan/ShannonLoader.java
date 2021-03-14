@@ -37,6 +37,7 @@ import ghidra.framework.model.DomainFolder;
 import ghidra.framework.store.LockException;
 import ghidra.program.model.data.*;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.address.AddressOverflowException;
@@ -393,7 +394,8 @@ public class ShannonLoader extends BinaryLoader
         Msg.info(this, String.format("Scatter: found scatter function %s (thumb=%s)",
               scatterFn, thumbPattern));
 
-        ArmDisassembleCommand cmd = new ArmDisassembleCommand(scatterFn, null, thumbPattern);
+        AddressSet addrSet = new AddressSet(scatterFn, scatterFn.add(0x100));
+        ArmDisassembleCommand cmd = new ArmDisassembleCommand(scatterFn, addrSet, thumbPattern);
 
         Msg.info(this, "Scatter: disassembling function...");
         if (!cmd.applyTo(program)) {

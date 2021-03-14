@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -582,13 +583,13 @@ public class ShannonLoader extends BinaryLoader
 
         for (TOCSectionHeader header : headerList) {
             // informative section such as OFFSET
-            if (header.getLoadAddress() == 0) {
+            if (header.getLoadAddress() == 0 && !header.getName().equals("BOOT")) {
               Msg.warn(this, String.format("%s: Skipping entry - zero load address",
                   header.getName()));
               continue;
             }
 
-            Msg.info(this, String.format("%s: %s", header.getName(), header.toString()));
+            Msg.info(this, String.format("%s: Add %s", header.getName(), header.toString()));
 
             if (!addMergeSection(provider, header))
               return false;

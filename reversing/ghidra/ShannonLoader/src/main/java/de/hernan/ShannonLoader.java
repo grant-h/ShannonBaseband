@@ -530,6 +530,21 @@ public class ShannonLoader extends BinaryLoader
             }
 
             try {
+              byte [] fourcc = fapi.getBytes(entry.dst, 4);
+              byte [] DBT = { 0x44, 0x42, 0x54, 0x3a }; // DBT:
+
+              // wow I hate how java deals with byte[] equality
+              if (Arrays.equals(fourcc, DBT)) {
+                // DO NOT OVERWRITE TRACE ENTRIES IF ASKED TO BY SCATTER TABLE
+                // Giving the big FU to this entry
+                //
+                // Unfortunately Shannon likes to reuse trace entry memory for GP RAM
+                // which means some decompilation/listing views will have strange references
+                // to trace data
+                Msg.info(this, "Scatter: IGNORING mean entry telling us to wipe debug data (jerk)");
+                continue;
+              }
+
               fapi.setBytes(entry.dst, data);
             } catch (MemoryAccessException e) {
               Msg.error(this, String.format("Scatter: entry write error"), e);

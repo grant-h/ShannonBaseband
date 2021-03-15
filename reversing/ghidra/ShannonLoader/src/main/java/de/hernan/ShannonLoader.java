@@ -63,7 +63,6 @@ public class ShannonLoader extends BinaryLoader
 {
     public static final String LOADER_NAME = "Samsung Shannon Modem Binary";
     public static final LanguageID LANG_ID = new LanguageID("ARM:LE:32:v8");
-    public static final long MAIN_TCM_ADDRESS = 0x04000000;
 
     private MemoryBlockHelper memoryHelper = null;
     private HashMap<String, TOCSectionHeader> headerMap = new HashMap<>();
@@ -365,6 +364,15 @@ public class ShannonLoader extends BinaryLoader
         if (!loadBasicTOCSections(provider, sec_boot, sec_main))
           return false;
 
+        ////////////////////////////////////////
+        // All opertations use FlatProgramAPI
+        // Instead of binary reader
+        ////////////////////////////////////////
+
+        if (mpuTableOffset != -1) {
+          typeMPUTable();
+        }
+
         if (!doScatterload(program, finder, headerMap.get("MAIN").getLoadAddress())) {
           Msg.warn(this, "Unable to process scatterload table. This table is used to unpack the MAIN image during baseband boot (runtime relocations). We would like to unpack it at load time in order to capture important regions, like TCM. Without this significant portions of critical code and data may appear to be missing.");
         }
@@ -375,6 +383,41 @@ public class ShannonLoader extends BinaryLoader
         organizeProgramTree(program);
 
         return true;
+    }
+
+    private boolean typeMPUTable()
+    {
+        // Type the entries
+        DataTypeManager dtm = fapi.getCurrentProgram().getDataTypeManager();
+        StructureDataType mpuEntryStruct = new StructureDataType("MPUTableEntry", 0);
+
+        mpuEntryStruct.add(new UnsignedIntegerDataType(), -1, "slotID", "");
+        mpuEntryStruct.add(new PointerDataType(), -1, "baseAddress", "");
+        mpuEntryStruct.add(new UnsignedIntegerDataType(), -1, "size", "");
+
+        for (int i = 0; i < 6; i++)
+          mpuEntryStruct.add(new UnsignedIntegerDataType(), -1, "flag" +String.valueOf(i), "");
+
+        mpuEntryStruct.add(new UnsignedIntegerDataType(), -1, "enabled", "");
+
+        DataType dat = dtm.addDataType(mpuEntryStruct, DataTypeConflictHandler.REPLACE_HANDLER);
+
+        if (mpuEntries.size() == 0)
+          return false;
+
+        Address start = fapi.toAddr(headerMap.get("MAIN").getLoadAddress()+mpuTableOffset);
+        ArrayDataType adty = new ArrayDataType(dat, mpuEntries.size(), dat.getLength());
+
+        DataType adtyadd = dtm.addDataType(adty, DataTypeConflictHandler.REPLACE_HANDLER);
+
+        try {
+          Data array = fapi.createData(start, adtyadd);
+          Msg.info(this, String.format("Typed MPUTable as %s", array));
+          return true;
+        } catch (Exception e) {
+          Msg.warn(this, "Failed to type MPUTable", e);
+          return false;
+        }
     }
 
     private boolean doScatterload(Program program, PatternFinder finder, long findBase)
@@ -405,8 +448,7 @@ public class ShannonLoader extends BinaryLoader
 
         Msg.info(this, "Scatter: inspecting instructions...");
 
-        // TODO: postfix function
-        Function func = fapi.createFunction(scatterFn, "__scatterload");
+        Function func = createUniqueFunction(scatterFn, "__scatterload");
 
         InstructionIterator insnIter = program.getListing().getInstructions(func.getBody(), true);
 
@@ -467,17 +509,15 @@ public class ShannonLoader extends BinaryLoader
 
           if (finfo.found()) {
             Address addr = addressSpace.getAddress(finfo.offset+findBase);
-            // TODO: disassemble or just label
-            // TODO: prefix function
-            fapi.createFunction(addr, fn);
-            Msg.info(this, String.format("Scatter: Found %s @ %s",
-                fn, addr));
+            createUniqueFunction(addr, fn);
+            Msg.info(this, String.format("Scatter: Found %s @ %s", fn, addr));
             scatterFunctions.put(fn, addr);
             invScatterFunctions.put(addr, fn);
           }
         }
 
         for (ScatterloadEntry entry : scatterEntries) {
+          // TODO: handle NO OP entries (size=0 and fn=__scatterload+N)
           if (!invScatterFunctions.containsKey(entry.function)) {
             Msg.warn(this, String.format("Scatter: unrecovered/recognized scatter op %s",
                   entry));
@@ -591,6 +631,19 @@ public class ShannonLoader extends BinaryLoader
         return true;
     }
 
+    private Function createUniqueFunction(Address start, String functionPrefix)
+    {
+      int postfix = 0;
+      String candidate = functionPrefix;
+
+      // convert to binary postfix search if heavily used (O(log n))
+      while (fapi.getFunction(candidate) != null) {
+        candidate = functionPrefix + "_" + String.valueOf(++postfix);
+      }
+
+      return fapi.createFunction(start, candidate);
+    }
+
     private boolean loadBasicTOCSections(ByteProvider provider, TOCSectionHeader sec_boot, TOCSectionHeader sec_main)
     {
         Msg.info(this, "==== Inflating primary sections ====");
@@ -599,8 +652,6 @@ public class ShannonLoader extends BinaryLoader
           if (!addMergeSection(provider, sec_boot, "BOOT_MIRROR", 0L))
             return false;
         }
-
-        // TODO: rename TCM region, if present
 
         List<TOCSectionHeader> headerList = new ArrayList<>(headerMap.values());
         Collections.sort(headerList, (o1, o2) -> o1.getLoadAddress() - o2.getLoadAddress());
@@ -807,7 +858,6 @@ public class ShannonLoader extends BinaryLoader
 
     }
 
-
     // TODO: add label and types to tables
     private void findShannonPatterns(PatternFinder finder, TOCSectionHeader fromSection)
     {
@@ -823,7 +873,8 @@ public class ShannonLoader extends BinaryLoader
 
     private boolean readMPUTable(BinaryReader reader)
     {
-        reader.setPointerIndex(headerMap.get("MAIN").getOffset()+mpuTableOffset);
+        long offset = headerMap.get("MAIN").getOffset()+mpuTableOffset;
+        reader.setPointerIndex(offset);
 
         while (true) {
           try {

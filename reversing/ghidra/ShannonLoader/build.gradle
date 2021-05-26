@@ -93,29 +93,9 @@ task buildExtension (type: Zip, overwrite: true) {
     }
 
     from (project.projectDir) {
-        exclude 'build/**'
-        exclude '*.gradle'
-        exclude 'certification.manifest'
-        exclude 'dist/**'
-        exclude 'bin/**'
-        exclude 'src/**'
-        exclude '.*.swp'
-        exclude '.*.swo'
-        exclude '.gradle/**'
-        exclude 'gradle/**'
-        exclude 'gradlew'
-        exclude 'gradlew.bat'
-        exclude '.classpath'
-        exclude '.project'
-        exclude '.settings/**'
-        exclude 'developer_scripts'
-        exclude '.antProperties.xml'
-        exclude 'eclipse/**'
-        exclude 'project/**'
-        exclude '*.zip'
-        exclude 'ghidra_*/'
-        exclude 'ShannonFirmware/'
-        exclude 'scripts/'
+        include 'Module.manifest'
+        include 'gradle.properties'
+        include 'README.md'
 
         into PATH_IN_ZIP
     }

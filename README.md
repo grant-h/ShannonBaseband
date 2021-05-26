@@ -5,11 +5,23 @@ These tools were released for the talk ["Emulating Samsung's Shannon Baseband fo
 
 ## Index
 
-* [`reversing/ghidra/ShannonLoader`](reversing/ghidra/ShannonLoader) - Table of Contents (TOC) Loader
-* [`reversing/ghidra/scripts`](reversing/ghidra/scripts) - Python scripts that help annotate Shannon modem images
-* [`reversing/modem`](reversing/modem) - Modem extraction script
-* [`reversing/btl`](reversing/btl) - Scripts and info to parse Back Trace Log (BTL) files
-* [`firmware/`](firmware/) - Information on firmware acquistion and some extracted data 
+### [ShannonLoader: `reversing/ghidra/ShannonLoader`](reversing/ghidra/ShannonLoader)
+A Ghidra extension for loading `modem.bin` binaries from nearly all known modems to date. All firmware images from https://github.com/grant-h/ShannonFirmware are loaded during CI tests for the loader to ensure its compatibility.
+
+### [Ghidra Scripts: `reversing/ghidra/scripts`](reversing/ghidra/scripts)
+Ghidra post-loading Python scripts that help annotate Shannon modem images.
+This includes recovering debug strings and auto-naming functions.
+Use after loading with ShannonLoader.
+
+### [Modem Binary Scripts: `reversing/modem`](reversing/modem)
+Raw `modem.bin` extraction script into sub parts and others as they are developed.
+
+### [Modem Log File Processing: `reversing/btl`](reversing/btl)
+Scripts and info to parse Back Trace Log (BTL) files. These are included during modem crashes / dumps or via the "CP RAM Logging" functionality.
+These are compressed log files from the actual running modem.
+
+### [Extracted Firmware Structures: `firmware/`](firmware/)
+Information on firmware acquistion and some extracted data dumps.
 
 ## Getting started with Shannon Firmware
 Here's a quick tutorial to start reversing this firmware with [GHIDRA](https://ghidra-sre.org/).
@@ -26,12 +38,6 @@ Here's a quick tutorial to start reversing this firmware with [GHIDRA](https://g
 1. Start reversing!
 
 If you want a quick look around, [we exported a GHIDRA project for a 2017 modem image](https://mega.nz/file/S04TWSLD#9fUma__iIz4mpvGlTRnDjCfm7hjUo9IIpirx51-CqjY).
-
-## Testing
-The loader and scripts have been QA'd to work with Ghidra 9.1.2 and many of the firmware images included in the `firmware/` section of this repo.
-
-Some known issues include the loader not being able to find certain memory patterns on 5G baseband images (due to large architectural changes).
-Please report or open a pull request for any exceptions or other errors so we can improve the tooling across firmware and Ghidra versions.
 
 ## Related Resources
 

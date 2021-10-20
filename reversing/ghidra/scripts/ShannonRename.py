@@ -20,6 +20,7 @@ c_function = re.compile(r'[a-zA-Z_][a-zA-Z0-9_]*')
 c_justname = re.compile(r'[a-zA-Z][a-zA-Z0-9]*')
 c_function_caps = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 
+
 class Node:
     def __str__(self):
         raise NotImplementedError("Must sub-class")
@@ -218,15 +219,15 @@ class FunctionNode(ReferenceNode):
                 refs = getReferences(insn)
                 for r in refs:
                     self.addReference(r)
-        
+
         processed.append(self.getName())
         #for r in self.references:
             #if isinstance(r, FunctionNode):
             #    processed = r.process(processed=processed)
         return processed
-    
+
 class FunctionNotFoundException(exceptions.Exception):
-    pass   
+    pass
 
 def getStringAtAddr(addr):
     """Get string at an address, if present"""
@@ -384,7 +385,7 @@ def getCyclomaticComplexity():
         complex_list += [(name, res)]
 
         monitor.incrementProgress(1)
-    
+
     complex_list = sorted(complex_list, key=lambda x: x[1], reverse=True)
 
     for name, complexity in complex_list:
@@ -392,6 +393,7 @@ def getCyclomaticComplexity():
 
 
 def processAll():
+    named_fns = {}
     mgr = currentProgram.getFunctionManager()
 
     monitor.setIndeterminate(False)
@@ -419,6 +421,12 @@ def processAll():
         name = func.predictedName()
 
         if name is not None:
+            if name not in named_fns:
+                named_fns[name] = 0
+            else:
+                named_fns[name] += 1
+                name = "%s_%d" % (name, named_fns[name])
+
             function.setName(name, SourceType.USER_DEFINED)
             successful += 1
 

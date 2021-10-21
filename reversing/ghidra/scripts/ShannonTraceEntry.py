@@ -22,6 +22,8 @@ DEBUG_RETYPE_SKIP = 0 # change to right before the entry giving errors
 # Change to false if you don't want your output window to be spammed
 SHOW_OUTPUT = True
 
+FIND_STEP = 10000
+
 def create_trace_entry():
     """create_trace_entry
 
@@ -187,6 +189,7 @@ def dump_trace_entries(fapi, filename, trace_entry_addrs):
 def main():
     fapi = FlatProgramAPI(currentProgram)
 
+
     te_list = fapi.getDataTypes("TraceEntry")
 
     if len(te_list) == 0:
@@ -206,14 +209,17 @@ def main():
 
     trace_entry_addrs = []
     while caddr is not None and not monitor.isCancelled():
-        caddrs = fapi.findBytes(caddr, "DBT:", 1000)
+        # Ghidra findBytes returns one address more than requested at a really
+        # high offset; hence, we need to manual limit the amount of entries.
+        caddrs = fapi.findBytes(caddr, "DBT:", FIND_STEP, 4)[:FIND_STEP]
 
         if not caddrs:
             break
 
         trace_entry_addrs += caddrs
 
-        caddr = caddrs[-1].add(1)
+        caddr = caddrs[-1].add(4)
+
         monitor.setMessage("Found %d TraceEntries" % len(trace_entry_addrs))
 
         if DEBUG_FIND and len(trace_entry_addrs) > DEBUG_FIND_MAX_ENTRIES:

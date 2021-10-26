@@ -34,7 +34,7 @@ Here's a quick tutorial to start reversing this firmware with [GHIDRA](https://g
 1. Now run the `ShannonTraceEntry.py` python script from Script Manager under the "Shannon" category. Make sure to either place scripts into your user home directory at `~/ghidra_scripts` (Linux) or add the path to them in the manager. This script will identify all trace debugging information before analysis and avoid diassembling data.
 1. Go to *Analysis* &raquo; *Auto analyze...*, and **uncheck the "Non-returning Functions - Discovered" analyzer** as this causes broken recovery of the `log_printf` function, leading to broken disassembly throughout the binary. If you do not uncheck this, you will need to restart your import from scratch.
 1. Hit analyze and let GHIDRA churn away until it settles.
-1. Next optionally run the auto-renamer script, `ShannonRename.py`. This will help you navigate the binary, but is far from perfect and leads to duplicate names (okay in GHIDRA, but not in IDA).
+1. Next optionally run the auto-renamer script, `ShannonRename.py`. This will help you navigate the binary, but remember that the names are heuristically determined, so quality may vary. Functions with the same guessed name will have a numeric prefix appended.
 1. Start reversing!
 
 If you want a quick look around, [we exported a GHIDRA project for a 2017 modem image](https://mega.nz/file/S04TWSLD#9fUma__iIz4mpvGlTRnDjCfm7hjUo9IIpirx51-CqjY).

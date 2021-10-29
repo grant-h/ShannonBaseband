@@ -16,7 +16,7 @@ Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`
 * Only basic TOC extraction support at the moment
 * Roadmap: MMU map recovery
 
-## Building
+## Building and Testing
 - Ensure you have ``JAVA_HOME`` set to the path of your JDK 11 installation (the default).
 - Set ``GHIDRA_INSTALL_DIR`` to your Ghidra install directory. This can be done in one of the following ways:
     - **Windows**: Running ``set GHIDRA_INSTALL_DIR=<Absolute path to Ghidra without quotations>``
@@ -25,6 +25,14 @@ Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`
     - Adding ``GHIDRA_INSTALL_DIR`` to your Windows environment variables.
 - Run ``./gradlew``
 - You'll find the output zip file inside `./dist`
+
+To build, install, and test all at once on Linux, use the [`./scripts/workflow.sh`](./scripts/workflow.sh). For example:
+
+```
+GHIDRA_INSTALL_DIR=<Absolute path to Ghidra> ./scripts/workflow.sh <path to modem.bin> <path to existing or temporary ghidra project directory>
+```
+
+Note that your modem can deeply nested via compression or tar archives and this script will still work. You can pass a directory of modem files to try as well.
 
 ## Installation
 - Start Ghidra and use the "Install Extensions" dialog (``File -> Install Extensions...``).

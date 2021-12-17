@@ -24,6 +24,7 @@ import de.hernan.TOCSectionHeader;
 import de.hernan.util.PatternFinder;
 import de.hernan.util.PatternEntry;
 import de.hernan.util.ByteCharSequence;
+import de.hernan.util.Hasher;
 
 import ghidra.app.cmd.disassemble.ArmDisassembleCommand;
 import ghidra.app.util.Option;
@@ -530,6 +531,14 @@ public class ShannonLoader extends BinaryLoader
               scatterOp, entry.src, entry.dst, entry.size);
           Msg.info(this, "Scatter: applying "+ scatterComment);
 
+          addrSet = new AddressSet(entry.function, entry.function.add(0x100));
+          cmd = new ArmDisassembleCommand(entry.function, addrSet, thumbPattern);
+
+          if (!cmd.applyTo(program)) {
+            Msg.error(this, String.format("Scatter: failed to disassemble %s function", scatterOp));
+            return false;
+          }
+
           byte [] data = null;
           Address scatterEntrySrcEnd = Address.NO_ADDRESS;
 
@@ -560,6 +569,14 @@ public class ShannonLoader extends BinaryLoader
             continue;
           }
 
+          // Emulation is very slow for large regions. Emulation used to validate Java versions of scatter functions
+          // Uncomment to debug issues with scatter function patterns and/or implementation
+          /*byte [] emuData = entry.emulateEntry(fapi);
+
+          if (emuData != null) {
+            Msg.info(this, String.format("Scatter: EMU %s -- Java %s", Hasher.md5(emuData), Hasher.md5(data)));
+          }*/
+
           boolean newDataCopied = scatterEntrySrcEnd.compareTo(Address.NO_ADDRESS) != 0;
 
           if (memoryHelper.blockExists(entry.dst)) {
@@ -572,15 +589,14 @@ public class ShannonLoader extends BinaryLoader
               byte [] fourcc = fapi.getBytes(entry.dst, 4);
               byte [] DBT = { 0x44, 0x42, 0x54, 0x3a }; // DBT:
 
-              // wow I hate how java deals with byte[] equality
               if (Arrays.equals(fourcc, DBT)) {
                 // DO NOT OVERWRITE TRACE ENTRIES IF ASKED TO BY SCATTER TABLE
-                // Giving the big FU to this entry
                 //
                 // Unfortunately Shannon likes to reuse trace entry memory for GP RAM
                 // which means some decompilation/listing views will have strange references
-                // to trace data
-                Msg.info(this, "Scatter: IGNORING mean entry telling us to wipe debug data (jerk)");
+                // to trace data. Possibly a Ghidra overlay would solve this, but I tried without
+                // much success.
+                Msg.info(this, "Scatter: IGNORING entry telling us to wipe debug data (nice try)");
                 continue;
               }
 
@@ -609,7 +625,7 @@ public class ShannonLoader extends BinaryLoader
               ArrayDataType adty = new ArrayDataType(new ByteDataType(),
                   (int)(long)scatterEntrySrcEnd.subtract(entry.src), 1);
 
-              // Create the array of bytes to prevent autoanalysis from getting greedy
+              // Create the array of bytes to prevent autoanalysis from getting greedy on the source scatter
               Data array = fapi.createData(entry.src, adty);
             }
           } catch (Exception e) {

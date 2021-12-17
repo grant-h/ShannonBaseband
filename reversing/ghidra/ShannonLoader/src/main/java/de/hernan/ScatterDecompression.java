@@ -4,7 +4,7 @@ import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.flatapi.FlatProgramAPI;
 import ghidra.program.model.address.Address;
 
-class ScatterDecompression {
+public class ScatterDecompression {
 
   static public class DecompressionResult {
     public final byte [] data;
@@ -60,9 +60,13 @@ class ScatterDecompression {
           for (int i = 0; i < litLen+2; i++) {
             if (emitOff >= decompressedSize)
               throw new MemoryAccessException("Decompression overflow");
+
             if (backrefOffset < 0 || backrefOffset >= emitOff || backrefOffset >= decompressedSize)
               throw new MemoryAccessException("Decompression backreference out-of-range");
-            emit[emitOff++] = emit[emitOff - backref];
+
+            backrefOffset = emitOff - backref;
+            emit[emitOff] = emit[backrefOffset];
+            emitOff++;
           }
         }
       }
@@ -100,16 +104,17 @@ class ScatterDecompression {
           continue;
 
         int backref = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
-        int backrefOffset = emitOff - backref;
-
         int backrefMult = token & 0xC;
 
-        if (backrefMult == 12) {
+        // The backreference can stride much further with decompress2
+        if (backrefMult == 0xC) {
           backrefMult = Byte.toUnsignedInt(fapi.getByte(start.add(off++)));
-          backrefOffset -= 0x100*backrefMult;
+          backref += 0x100*backrefMult;
         } else {
-          backrefOffset -= 0x40*backrefMult;
+          backref += 0x40*backrefMult;
         }
+
+        int backrefOffset = emitOff - backref;
 
         /*System.out.println(String.format("emitoff=%d backref=%d backrefOff=%d max=%d",
               emitOff, backref, backrefOffset, decompressedSize));*/
@@ -119,7 +124,10 @@ class ScatterDecompression {
             throw new MemoryAccessException("Decompression overflow");
           if (backrefOffset < 0 || backrefOffset >= emitOff || backrefOffset >= decompressedSize)
             throw new MemoryAccessException("Decompression backreference out-of-range");
-          emit[emitOff++] = emit[emitOff - backref];
+
+          backrefOffset = emitOff - backref;
+          emit[emitOff] = emit[backrefOffset];
+          emitOff++;
         }
       }
 

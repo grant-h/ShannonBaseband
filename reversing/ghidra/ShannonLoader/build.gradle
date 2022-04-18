@@ -55,15 +55,18 @@ configurations {
 }
 
 dependencies {
-    compile fileTree(dir: ghidraInstallDir + '/Ghidra/Processors', include: "**/*.jar")
-    compile configurations.localDeps
+    api fileTree(dir: ghidraInstallDir + '/Ghidra/Processors', include: "**/*.jar")
+    api configurations.localDeps
 }
 
-task buildExtension (type: Zip, overwrite: true) {
+buildExtension.enabled = false
+defaultTasks 'createDistribution'
+
+task createDistribution (type: Zip) {
     String hash = "${getGitHash()}"
-    baseName "${project.name}-${project.version}-${hash}-Ghidra_${ghidra_version}".replace(' ', '_')
-    extension 'zip'
-    destinationDir DISTRIBUTION_DIR
+    archiveBaseName = "${project.name}-${project.version}-${hash}-Ghidra_${ghidra_version}".replace(' ', '_')
+    archiveExtension = 'zip'
+    destinationDirectory = DISTRIBUTION_DIR
     version ''
     
     // Make sure that we don't try to copy the same file with the same path into the
@@ -101,6 +104,6 @@ task buildExtension (type: Zip, overwrite: true) {
     }
 
     doLast {
-        println "\nCreated " + baseName + "." + extension + " in " + destinationDir
+        println "\nCreated " + archiveBaseName + "." + archiveExtension + " in " + destinationDirectory
     }
 }

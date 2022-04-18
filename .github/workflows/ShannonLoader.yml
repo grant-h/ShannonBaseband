@@ -22,7 +22,7 @@ jobs:
         working-directory: reversing/ghidra/ShannonLoader
 
     env:
-      GHIDRA_VERSION: ghidra_9.2.4_PUBLIC
+      GHIDRA_VERSION: ghidra_10.1.2_PUBLIC
 
     steps:
     - uses: actions/checkout@v2
@@ -35,9 +35,9 @@ jobs:
       with:
         java-version: 11
     - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
-      run: wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_9.2.4_build/${GHIDRA_VERSION}_20210427.zip
+      run: wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_10.1.2_build/${GHIDRA_VERSION}_20220125.zip
     - name: Unzip Ghidra
-      run: unzip -q ${GHIDRA_VERSION}_20210427.zip
+      run: unzip -q ${GHIDRA_VERSION}_20220125.zip
     - name: Build and pack extension
       run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./gradlew
     - name: Install extension to Ghidra

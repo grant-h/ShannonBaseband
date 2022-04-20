@@ -282,6 +282,8 @@ def main():
             #print(type(message_str.getValue()), message_str.getValue())
 
             message_str = message_str.getValue()
+            if message_str is None:
+                continue
             file_str = file_str.getValue()
 
             message_str_fixed = fixup_format_string(message_str)

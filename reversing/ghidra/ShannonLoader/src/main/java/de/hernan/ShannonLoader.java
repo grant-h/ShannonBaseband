@@ -270,7 +270,7 @@ public class ShannonLoader extends BinaryLoader
     }
 
     @Override
-    protected List<Program> loadProgram(ByteProvider provider, String programName,
+    protected List<LoadedProgram> loadProgram(ByteProvider provider, String programName,
             DomainFolder programFolder, LoadSpec loadSpec, List<Option> options, MessageLog log,
             Object consumer, TaskMonitor monitor)
                     throws IOException, CancelledException 
@@ -296,8 +296,8 @@ public class ShannonLoader extends BinaryLoader
             }
         }
 
-        List<Program> results = new ArrayList<Program>();
-        if (prog != null) results.add(prog);
+        List<LoadedProgram> results = new ArrayList<>();
+        if (prog != null) results.add(new LoadedProgram(prog, programFolder));
         return results;
     }
 

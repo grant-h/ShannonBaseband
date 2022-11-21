@@ -17,7 +17,7 @@ Extract this tar file into its two components, `modem.bin` and `modem_debug.bin`
 * Roadmap: MMU map recovery
 
 ## Building and Testing
-- Ensure you have ``JAVA_HOME`` set to the path of your JDK 11 installation (the default).
+- Ensure you have ``JAVA_HOME`` set to the path of your JDK 17 installation (the default).
 - Set ``GHIDRA_INSTALL_DIR`` to your Ghidra install directory. This can be done in one of the following ways:
     - **Windows**: Running ``set GHIDRA_INSTALL_DIR=<Absolute path to Ghidra without quotations>``
     - **macos/Linux**: Running ``export GHIDRA_INSTALL_DIR=<Absolute path to Ghidra>``

@@ -34,7 +34,7 @@ jobs:
     - name: Installing JDK
       uses: actions/setup-java@v1
       with:
-        java-version: 11
+        java-version: 17
     - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
       run: wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_10.2.2_build/${GHIDRA_VERSION}_${GHIDRA_BUILDDATE}.zip
     - name: Unzip Ghidra

@@ -13,6 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+import org.apache.tools.ant.filters.ReplaceTokens
+
 // Builds a Ghidra Extension for a given Ghidra installation.
 //
 // An absolute path to the Ghidra installation directory must be supplied either by setting the 
@@ -59,5 +62,33 @@ dependencies {
 	// this extension is built.	
 }
 
-// Exclude additional files from the built extension
-// Ex: buildExtension.exclude '.idea/**'
+buildExtension.exclude '**/.*.swp'
+buildExtension.exclude '*.zip'
+buildExtension.exclude '*.log'
+buildExtension.exclude 'scripts/'
+
+// During CI/testing these exist
+buildExtension.exclude 'ShannonFirmware/'
+buildExtension.exclude 'ghidra_*/'
+
+def hash = {
+    def stdout = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'rev-parse', '--short', 'HEAD'
+        standardOutput = stdout
+    }
+    return stdout.toString().trim()
+}()
+def pathInZip = "${project.name}"
+
+buildExtension.duplicatesStrategy 'exclude'
+buildExtension.eachFile {
+  if (it.name == "extension.properties") {
+    String version = "${ghidra_version}"
+    String name = "${project.name}"
+    filter (ReplaceTokens, tokens: [projectversion: project.version])
+    filter (ReplaceTokens, tokens: [projecthash: hash])
+  }
+}
+
+buildExtension.archiveBaseName = "${project.name}-${project.version}-${hash}-Ghidra_${ghidra_version}".replace(' ', '_')

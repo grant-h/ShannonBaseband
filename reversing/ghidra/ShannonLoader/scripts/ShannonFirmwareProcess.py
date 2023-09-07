@@ -188,7 +188,7 @@ def main():
 
 def shannon_analyze(ghidra_cmd, project_path, project_name, binary_path):
     if not os.access(binary_path, os.R_OK):
-        log.error("Binary to analyze %s doesnt exist", binary_path)
+        log.error("Binary to analyze %s doesn't exist", binary_path)
         return False
 
     if not ghidra_cmd.load_overwrite(project_path, project_name, binary_path):

@@ -1,2 +1,8 @@
 *swp
 *swo
+
+# Eclipse stuff
+.classpath
+.project
+.pydevproject
+.settings

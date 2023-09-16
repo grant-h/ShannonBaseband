@@ -15,16 +15,12 @@ import java.util.HashMap;
 import java.util.Map;
 import static java.util.Map.entry;
 import java.util.Collection;
-import java.util.Scanner;
 import java.util.Comparator;
 import java.util.List;
 
 import adubbz.nx.loader.common.MemoryBlockHelper;
-import de.hernan.TOCSectionHeader;
 import de.hernan.util.PatternFinder;
 import de.hernan.util.PatternEntry;
-import de.hernan.util.ByteCharSequence;
-import de.hernan.util.Hasher;
 
 import ghidra.app.cmd.disassemble.ArmDisassembleCommand;
 import ghidra.app.util.Option;
@@ -32,10 +28,11 @@ import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.app.util.opinion.BinaryLoader;
+import ghidra.app.util.opinion.LoadException;
 import ghidra.app.util.opinion.LoadSpec;
+import ghidra.app.util.opinion.Loaded;
 import ghidra.app.util.opinion.LoaderTier;
-import ghidra.framework.model.DomainFolder;
-import ghidra.framework.store.LockException;
+import ghidra.framework.model.Project;
 import ghidra.program.model.data.*;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
@@ -51,8 +48,6 @@ import ghidra.program.model.lang.LanguageID;
 import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.listing.*;
-import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.database.module.TreeManager;
 import ghidra.program.flatapi.FlatProgramAPI;
@@ -99,7 +94,7 @@ public class ShannonLoader extends BinaryLoader
          *
          * [slot][base][size][access_control]{6}[enable]
          *
-         * Slot - the architectual MPU slot number
+         * Slot - the architectural MPU slot number
          * Base - the base address the MPU entry should apply to
          * Size - a size code that indicates the memory range an entry should cover
          * Access Control - a series of 6 words that are OR'd together to form the MPU permissions
@@ -270,10 +265,10 @@ public class ShannonLoader extends BinaryLoader
     }
 
     @Override
-    protected List<LoadedProgram> loadProgram(ByteProvider provider, String programName,
-            DomainFolder programFolder, LoadSpec loadSpec, List<Option> options, MessageLog log,
-            Object consumer, TaskMonitor monitor)
-                    throws IOException, CancelledException 
+    protected List<Loaded<Program>> loadProgram(ByteProvider provider, String programName,
+	    Project project, String programFolderPath, LoadSpec loadSpec, List<Option> options,
+	    MessageLog log, Object consumer, TaskMonitor monitor)
+		    throws IOException, CancelledException 
     {
         LanguageCompilerSpecPair pair = loadSpec.getLanguageCompilerSpec();
         Language importerLanguage = getLanguageService().getLanguage(pair.languageID);
@@ -281,23 +276,19 @@ public class ShannonLoader extends BinaryLoader
 
         Address baseAddr = importerLanguage.getAddressFactory().getDefaultAddressSpace().getAddress(0);
         Program prog = createProgram(provider, programName, baseAddr, getName(), importerLanguage, importerCompilerSpec, consumer);
-        boolean success = false;
 
+        List<Loaded<Program>> results = new ArrayList<>(1);
         try 
         {
-            success = this.loadInto(provider, loadSpec, options, log, prog, monitor);
+          this.loadInto(provider, loadSpec, options, log, prog, monitor);
+          results.add(new Loaded<Program>(prog, programName, programFolderPath));
         }
-        finally 
+        catch (Exception e) 
         {
-            if (!success) 
-            {
-                prog.release(consumer);
-                prog = null;
-            }
+          Msg.error(this, "Error while loading " + programFolderPath + ": " + e);
+          prog.release(consumer);
         }
 
-        List<LoadedProgram> results = new ArrayList<>();
-        if (prog != null) results.add(new LoadedProgram(prog, programFolder));
         return results;
     }
 
@@ -326,23 +317,24 @@ public class ShannonLoader extends BinaryLoader
     }
 
     @Override
-    protected boolean loadProgramInto(ByteProvider provider, LoadSpec loadSpec, List<Option> options,
+    protected void loadProgramInto(ByteProvider provider, LoadSpec loadSpec, List<Option> options,
             MessageLog messageLog, Program program, TaskMonitor monitor) 
-                    throws IOException
+                    throws IOException, LoadException
     {
         BinaryReader reader = new BinaryReader(provider, true);
         memoryHelper = new MemoryBlockHelper(program, messageLog, 0L);
         fapi = new FlatProgramAPI(program);
 
-        if (!processTOCHeader(reader))
-          return false;
+        if (!processTOCHeader(reader)) {
+        	throw new LoadException("The file does not look like a Shannon Baseband. TOC Mismatch.");
+        }
 
         TOCSectionHeader sec_main = headerMap.get("MAIN");
         TOCSectionHeader sec_boot = headerMap.get("BOOT");
 
         if (sec_main == null || sec_boot == null) {
           Msg.error(this, "One or more of the required sections [MAIN, BOOT] were not found");
-          return false;
+          throw new LoadException("The file does not look like a Shannon Baseband. One or more of the required sections [MAIN, BOOT] were not found.");
         }
 
         PatternFinder finder = new PatternFinder(
@@ -355,18 +347,21 @@ public class ShannonLoader extends BinaryLoader
         findShannonPatterns(finder, sec_main);
 
         if (mpuTableOffset != -1) {
-          if (!readMPUTable(reader))
-            return false;
+          if (!readMPUTable(reader)) {
+            throw new LoadException("Error reading MPU table.");
+          }
 
-          if (!calculateShannonMemoryMap())
-            return false;
+          if (!calculateShannonMemoryMap()) {
+            throw new LoadException("Error calculating shannon memory map.");
+          }
         }
 
-        if (!loadBasicTOCSections(provider, sec_boot, sec_main))
-          return false;
+        if (!loadBasicTOCSections(provider, sec_boot, sec_main)) {
+          throw new LoadException("Error loading basic TOC sections.");
+        }
 
         ////////////////////////////////////////
-        // All opertations use FlatProgramAPI
+        // All operations use FlatProgramAPI
         // Instead of binary reader
         ////////////////////////////////////////
 
@@ -382,8 +377,6 @@ public class ShannonLoader extends BinaryLoader
 
         syncProgramTreeWithMemoryMap(program);
         organizeProgramTree(program);
-
-        return true;
     }
 
     private boolean typeMPUTable()
@@ -482,7 +475,7 @@ public class ShannonLoader extends BinaryLoader
           // to the function (this is PC-relative)
           long startOffset = ((Scalar)ref1.getValue()).getSignedValue();
           long endOffset = ((Scalar)ref2.getValue()).getSignedValue();
-          long tableSize = endOffset - startOffset;
+          //long tableSize = endOffset - startOffset;
 
           Address tableAddress = tableBase.add(startOffset);
           Address tableEndAddress = tableBase.add(endOffset);
@@ -625,8 +618,8 @@ public class ShannonLoader extends BinaryLoader
               ArrayDataType adty = new ArrayDataType(new ByteDataType(),
                   (int)(long)scatterEntrySrcEnd.subtract(entry.src), 1);
 
-              // Create the array of bytes to prevent autoanalysis from getting greedy on the source scatter
-              Data array = fapi.createData(entry.src, adty);
+              // Create an array of bytes to prevent autoanalysis from getting greedy on the source scatter
+              fapi.createData(entry.src, adty);
             }
           } catch (Exception e) {
             Msg.warn(this, "Scatter: failed to label scatter operation");
@@ -653,7 +646,7 @@ public class ShannonLoader extends BinaryLoader
       String candidate = functionPrefix;
 
       // convert to binary postfix search if heavily used (O(log n))
-      while (fapi.getFunction(candidate) != null) {
+      while (!fapi.getGlobalFunctions(candidate).isEmpty()) {
         candidate = functionPrefix + "_" + String.valueOf(++postfix);
       }
 
@@ -838,7 +831,7 @@ public class ShannonLoader extends BinaryLoader
         Msg.info(this, String.format("ShannonLoader TOC header found at with size=%08x...parsing header",
             tocFirst.getSize()));
 
-        long prevPointerIndex = reader.getPointerIndex();
+        //long prevPointerIndex = reader.getPointerIndex();
 
         while (reader.getPointerIndex() < tocFirst.getSize()) {
           try {
@@ -949,7 +942,7 @@ public class ShannonLoader extends BinaryLoader
 
         Collections.sort(addrEntries, new Comparator<AddressItem>() {
           public int compare(AddressItem o1, AddressItem o2) {
-            long comp = o1.getAddr() - o2.getAddr();
+            //long comp = o1.getAddr() - o2.getAddr();
 
             if (o1.getAddr() < o2.getAddr())
               return -1;

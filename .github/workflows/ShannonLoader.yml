@@ -22,26 +22,43 @@ jobs:
         working-directory: reversing/ghidra/ShannonLoader
 
     env:
-      GHIDRA_VERSION: ghidra_10.2.2_PUBLIC
-      GHIDRA_BUILDDATE: 20221115
+      GHIDRA_VERSION: 10.3.3
+      GHIDRA_BUILDDATE: 20230829
 
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions/checkout@v2
-      with:
-        repository: grant-h/ShannonFirmware
-        path: reversing/ghidra/ShannonLoader/ShannonFirmware
-    - name: Installing JDK
-      uses: actions/setup-java@v1
-      with:
-        java-version: 17
-    - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
-      run: wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_10.2.2_build/${GHIDRA_VERSION}_${GHIDRA_BUILDDATE}.zip
-    - name: Unzip Ghidra
-      run: unzip -q ${GHIDRA_VERSION}_${GHIDRA_BUILDDATE}.zip
-    - name: Build and pack extension
-      run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./gradlew
-    - name: Install extension to Ghidra
-      run: unzip ./dist/ShannonLoader-*.zip -d ./${GHIDRA_VERSION}/Ghidra/Extensions
-    - name: Test loader on firmware corpus
-      run: GHIDRA_INSTALL_DIR=$(pwd)/${GHIDRA_VERSION} ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ./ShannonFirmware/modem_files
+      # Checkout main repo
+      - uses: actions/checkout@v2
+
+      - name: Installing JDK
+        uses: actions/setup-java@v1
+        with:
+          java-version: 17
+
+      - name: Download Ghidra ${{ env.GHIDRA_VERSION }}
+        run: wget -q "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILDDATE}.zip"
+
+      - name: Unzip Ghidra
+        run: unzip -q "ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILDDATE}.zip"
+
+      - name: Build and pack extension
+        run: GHIDRA_INSTALL_DIR="$(pwd)/ghidra_${GHIDRA_VERSION}_PUBLIC" ./gradlew
+
+      - name: Install extension to Ghidra
+        run: unzip "dist/ShannonLoader*.zip" -d "./ghidra_${GHIDRA_VERSION}_PUBLIC/Ghidra/Extensions"
+
+      #########################
+
+      - uses: actions/checkout@v2
+        with:
+          repository: grant-h/ShannonFirmware
+          path: reversing/ghidra/ShannonLoader/ShannonFirmware
+
+      - name: Test loader on firmware corpus
+        run: GHIDRA_INSTALL_DIR="$(pwd)/ghidra_${GHIDRA_VERSION}_PUBLIC" ./scripts/ShannonFirmwareProcess.py $(pwd) ShannonProject ./ShannonFirmware/modem_files
+
+      - name: Upload extension
+        uses: actions/upload-artifact@v3
+        with:
+          name: ShannonLoader
+          path: reversing/ghidra/ShannonLoader/dist/ShannonLoader*.zip
+          if-no-files-found: error

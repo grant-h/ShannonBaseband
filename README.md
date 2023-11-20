@@ -43,3 +43,7 @@ If you want a quick look around, [we exported a GHIDRA project for a 2017 modem 
 
 * ShannonRE (Comsecuris, REcon 2016) - https://github.com/Comsecuris/shannonRE
 * Awesome Baseband Research - https://github.com/lololosys/awesome-baseband-research
+
+## License
+
+The repository's license is MIT. NOTE: The top-level license covers only files that explicitly contain SPDX markings, not the entire repository. For other files, they may not be licensable (e.g. binary dumps, firmware) or may contain other permissive licenses.

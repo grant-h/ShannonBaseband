@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+## Copyright (c) 2023, Grant Hernandez (https://github.com/grant-h)
+## SPDX-License-Identifier: MIT
 import argparse
 import tempfile
 import sys

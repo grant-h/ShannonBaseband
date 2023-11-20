@@ -1,3 +1,5 @@
+// Copyright (c) 2023, Grant Hernandez
+// SPDX-License-Identifier: MIT
 package de.hernan;
 
 import java.io.IOException;

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Author: Grant Hernandez (https://github.com/grant-h)
+## Copyright (c) 2023, Grant Hernandez (https://github.com/grant-h)
+## SPDX-License-Identifier: MIT
 #
 # A python script to decode Samsung .BTL files that are generated during
 # Shannon modem dumps / crashes. Check out the 'BTL' task in the modem

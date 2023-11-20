@@ -1,4 +1,6 @@
 #!/usr/bin/env python2
+## Copyright (c) 2023, Grant Hernandez (https://github.com/grant-h)
+## SPDX-License-Identifier: MIT
 import os
 import struct
 import sys

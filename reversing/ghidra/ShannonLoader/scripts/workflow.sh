@@ -1,4 +1,6 @@
 #!/bin/bash
+## Copyright (c) 2023, Grant Hernandez (https://github.com/grant-h)
+## SPDX-License-Identifier: MIT
 set -eu
 
 if [ $# -ne 2 ]; then

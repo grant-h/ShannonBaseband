@@ -2,6 +2,8 @@
 # Auto-renamer for Shannon baseband firmware
 # @author Grant Hernandez (https://github.com/grant-h)
 # @category Shannon
+## Copyright (c) 2023, Grant Hernandez
+## SPDX-License-Identifier: MIT
 
 # This is super hacky and only needed if you borked your import and are left with a bunch of undisassembled blocks due to false positive non-returning functions
 # Included in the Shannon release for demonstrating some interesting uses of the API (disassembly, flow overrides)

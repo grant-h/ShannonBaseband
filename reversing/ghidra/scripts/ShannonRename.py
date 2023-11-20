@@ -1,6 +1,8 @@
 # Auto-renamer for Shannon baseband firmware
 # @author Grant Hernandez (https://github.com/grant-h)
 # @category Shannon
+## Copyright (c) 2023, Grant Hernandez
+## SPDX-License-Identifier: MIT
 
 # This script was copied from a GHIDRA example script, so its a bit rough
 

@@ -1,8 +1,5 @@
-/**
- * ShannonLoader
- * Created by Grant Hernandez, 2020
- */
-
+// Copyright (c) 2023, Grant Hernandez
+// SPDX-License-Identifier: MIT
 package de.hernan;
 
 import java.io.IOException;

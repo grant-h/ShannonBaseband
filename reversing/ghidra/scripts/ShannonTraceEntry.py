@@ -1,6 +1,8 @@
 # Utilities to work with Shannon baseband TraceEntries
 # @author Grant Hernandez (https://github.com/grant-h)
 # @category Shannon
+## Copyright (c) 2023, Grant Hernandez
+## SPDX-License-Identifier: MIT
 
 from __future__ import print_function
 from ghidra.program.flatapi import FlatProgramAPI

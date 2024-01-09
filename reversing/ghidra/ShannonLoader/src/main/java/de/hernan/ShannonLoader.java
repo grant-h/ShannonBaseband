@@ -322,6 +322,9 @@ public class ShannonLoader extends BinaryLoader
         memoryHelper = new MemoryBlockHelper(program, messageLog, 0L);
         fapi = new FlatProgramAPI(program);
 
+        monitor.setMaximum(100);
+        monitor.incrementProgress(3);
+
         if (!processTOCHeader(reader)) {
         	throw new LoadException("The file does not look like a Shannon Baseband. TOC Mismatch.");
         }
@@ -334,14 +337,20 @@ public class ShannonLoader extends BinaryLoader
           throw new LoadException("The file does not look like a Shannon Baseband. One or more of the required sections [MAIN, BOOT] were not found.");
         }
 
+        monitor.incrementProgress(10);
+
         PatternFinder finder = new PatternFinder(
             provider.getInputStream(sec_main.getOffset()), sec_main.getSize(),
             patternDB);
 
+        monitor.incrementProgress(5);
+
         // purely informational for now
         discoverSocVersion(finder);
+        monitor.incrementProgress(5);
 
         findShannonPatterns(finder, sec_main);
+        monitor.incrementProgress(20);
 
         if (mpuTableOffset != -1) {
           if (!readMPUTable(reader)) {
@@ -352,10 +361,12 @@ public class ShannonLoader extends BinaryLoader
             throw new LoadException("Error calculating shannon memory map.");
           }
         }
+	monitor.incrementProgress(10);
 
         if (!loadBasicTOCSections(provider, sec_boot, sec_main)) {
           throw new LoadException("Error loading basic TOC sections.");
         }
+	monitor.incrementProgress(10);
 
         ////////////////////////////////////////
         // All operations use FlatProgramAPI
@@ -365,12 +376,15 @@ public class ShannonLoader extends BinaryLoader
         if (mpuTableOffset != -1) {
           typeMPUTable();
         }
+        monitor.incrementProgress(10);
 
         if (!doScatterload(program, finder, headerMap.get("MAIN").getLoadAddress())) {
           Msg.warn(this, "Unable to process scatterload table. This table is used to unpack the MAIN image during baseband boot (runtime relocations). We would like to unpack it at load time in order to capture important regions, like TCM. Without this significant portions of critical code and data may appear to be missing.");
         }
 
         Msg.info(this, "==== Finalizing program trees ====");
+
+        monitor.incrementProgress(30);
 
         syncProgramTreeWithMemoryMap(program);
         organizeProgramTree(program);

@@ -234,7 +234,7 @@ public class MemoryBlockHelper
     private String memoryPermissions(MemoryBlock block)
     {
       String perms = "";
-      int flags = block.getPermissions();
+      int flags = block.getFlags();
 
       if ((flags & MemoryBlock.READ) != 0)
         perms += "R";
